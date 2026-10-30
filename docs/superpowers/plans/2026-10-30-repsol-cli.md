@@ -2000,7 +2000,7 @@ hint to edit by hand.
 
 **Status.** `unchanged` when the entry already has the same command and args.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestToolsListed(t *testing.T) {
@@ -2032,19 +2032,19 @@ func TestInstallCursorCreatesFile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/mcpserver/`
 Expected: FAIL with `undefined: NewServer`.
 
-- [ ] **Step 3: Implement the server, install and the `mcp` commands**
+- [x] **Step 3: Implement the server, install and the `mcp` commands**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/mcpserver/ ./internal/cli/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/mcpserver internal/cli go.mod go.sum

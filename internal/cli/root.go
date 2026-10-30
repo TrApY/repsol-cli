@@ -198,6 +198,7 @@ func newRoot(state *rootState) *cobra.Command {
 		newConfigCommand(state),
 		newVersionCommand(state),
 		newSkillsCommand(state),
+		newMCPCommand(state),
 	)
 	return root
 }
