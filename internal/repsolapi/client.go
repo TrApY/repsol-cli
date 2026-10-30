@@ -28,6 +28,12 @@ type Client struct {
 	BaseURL string
 	// HTTP is the shared transport.
 	HTTP *httpx.Client
+	// Signer signs authenticated calls. A nil Signer makes them fail with an
+	// auth error before any request is sent.
+	Signer Signer
+	// Telemetry carries the identifiers of the current order flow. A nil
+	// Telemetry leaves the ptb-* headers off writes.
+	Telemetry *Telemetry
 }
 
 // queryParam is one query string parameter. The slice order is the order the

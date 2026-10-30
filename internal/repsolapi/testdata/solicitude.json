@@ -1,0 +1,25 @@
+{
+  "externalId": "800000000000000001",
+  "userGigyaUid": "U1",
+  "deliveryDate": "2026-11-05",
+  "discount": 0,
+  "address": {
+    "province": "Madrid",
+    "locality": "Móstoles",
+    "municipality": "Móstoles",
+    "street": "Ñandú",
+    "number": "3",
+    "door": "",
+    "floor": "",
+    "postalCode": "28931",
+    "streetType": "Calle"
+  },
+  "agency": {
+    "name": "Agencia de Prueba",
+    "phone": "910000000",
+    "repsolPhone": "900000000"
+  },
+  "material": "Butano 12.5kg",
+  "quantity": 1,
+  "unitPrice": 18.89
+}
