@@ -155,7 +155,7 @@ docs/                           cli-spec.md, adr/0001, adr/0002
   - `func From(err error) *Error`: never nil for a non-nil error.
   - `func ExitCode(err error) int`.
 
-- [ ] **Step 1: Initialise the repository and commit the docs on `main`**
+- [x] **Step 1: Initialise the repository and commit the docs on `main`**
 
 ```bash
 # from the repository root
@@ -178,7 +178,7 @@ git commit -m "docs: add design spec and implementation plan"
 git switch -c feat/v1
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```go
 func TestExitCode(t *testing.T) {
@@ -226,12 +226,12 @@ func TestFromKeepsFields(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run the tests and confirm they fail**
+- [x] **Step 3: Run the tests and confirm they fail**
 
 Run: `go test ./internal/apperr/`
 Expected: FAIL with `undefined: ExitCode`.
 
-- [ ] **Step 4: Implement `internal/apperr/apperr.go`**
+- [x] **Step 4: Implement `internal/apperr/apperr.go`**
 
 `Error()` returns `Message`, followed by `": " + Err.Error()` when `Err` is set. `From`
 maps errors as follows:
@@ -242,12 +242,12 @@ maps errors as follows:
 
 `ExitCode(nil)` is 0; otherwise it is `int(From(err).Category)`.
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `go test ./internal/apperr/`
 Expected: `ok`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/apperr go.mod
@@ -278,7 +278,7 @@ git commit -m "feat(apperr): add typed errors with stable exit codes"
   - `func RedactURL(u *url.URL) string`, `func RedactHeader(h http.Header) map[string]string`
     and `func RedactBody(b []byte) string`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestDoSendsUserAgentAndAccept(t *testing.T) {
@@ -339,12 +339,12 @@ func TestDebugLogRedactsSecrets(t *testing.T) { // Review Focus 2
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/httpx/`
 Expected: FAIL with `undefined: New`.
 
-- [ ] **Step 3: Implement `Client.Do` and the redactors**
+- [x] **Step 3: Implement `Client.Do` and the redactors**
 
 **`Do`**
 - Every attempt builds a fresh `*http.Request` from `bytes.NewReader(Body)`.
@@ -388,12 +388,12 @@ Expected: FAIL with `undefined: New`.
 - `RedactBody` tries JSON first, then `url.ParseQuery` with at least one key. If neither
   parses, it returns `"<N bytes>"`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/httpx/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/httpx
@@ -428,7 +428,7 @@ git commit -m "feat(httpx): add transport with UA, error mapping, read retries a
   - `func SessionFromHAR(r io.Reader) (Session, error)`
   - `func ParseSessionLine(line string) (Session, error)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestAccountInfoSendsGMIDCookie(t *testing.T) {
@@ -520,12 +520,12 @@ entries, in this order:
 
 `no_gmid.har` is entry 2 without cookies. `no_session.har` is entry 1 only.
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/gigya/`
 Expected: FAIL with `undefined: Client`.
 
-- [ ] **Step 3: Implement the client, error classification and session parsing**
+- [x] **Step 3: Implement the client, error classification and session parsing**
 
 **Requests**
 - `AccountInfo`: POST form, `Content-Type: application/x-www-form-urlencoded`. Sends
@@ -569,12 +569,12 @@ Every message includes `errorCode` and Gigya's `errorMessage`, never the request
 - `glt_<APIKey>` or `login_token` gives the token; `gmid` gives the gmid. Other keys are
   ignored.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/gigya/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/gigya
