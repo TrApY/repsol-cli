@@ -2134,12 +2134,12 @@ Expected: `--- SKIP: TestLiveReadOnly`.
 
 - [x] **Step 2: Write the docs, workflows, goreleaser and golangci config**
 
-- [ ] **Step 3: Verify the build and the test suite**
+- [x] **Step 3: Verify the build and the test suite**
 
 Run: `make test && make lint && make build VERSION=0.1.0 && ./bin/repsol version`
 Expected: tests `ok`; `go vet` clean; the version output shows `"version": "0.1.0"`.
 
-- [ ] **Step 4: Scan the repository for the owner's personal data**
+- [x] **Step 4: Scan the repository for the owner's personal data**
 
 Write theThe scanner already exists outside the repository, in the planning session's scratchpad
 (`scripts/pii_scan.py`). If it is missing, write it there again: it must never be
