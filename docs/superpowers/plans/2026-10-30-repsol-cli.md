@@ -1163,7 +1163,7 @@ git commit -m "test(fakerepsol): add in-process fake of Gigya, Repsol API and ad
 `Session` guards its cache and re-login with a `sync.Mutex`, because the MCP server can
 run tool calls concurrently.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 // app_test.go helpers
@@ -1231,12 +1231,12 @@ func TestStatusCheck(t *testing.T) {
 func TestLogout(t *testing.T) { /* Removed true, then false; other profiles untouched */ }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/app/`
 Expected: FAIL with `undefined: New`.
 
-- [ ] **Step 3: Implement `App`, `Session` and the auth use cases**
+- [x] **Step 3: Implement `App`, `Session` and the auth use cases**
 
 **`ImportSession`**
 - Calls `AccountInfo`. On error it returns before writing anything.
@@ -1249,12 +1249,12 @@ Expected: FAIL with `undefined: New`.
 
 Both cache the signature they obtained in the session.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/app/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/app
@@ -1530,7 +1530,7 @@ History mapping:
 - `Pending` uses the rule in step 7 against the stored address. When no address is stored,
   only the date counts.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestPlaceOrderSolicitude(t *testing.T) {
@@ -1588,19 +1588,19 @@ func TestHistoryViews(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/app/ -run 'Order|Pending|History|Policy'`
 Expected: FAIL with `undefined: PlaceOrder`.
 
-- [ ] **Step 3: Implement `PlaceOrder` and the history views as specified above**
+- [x] **Step 3: Implement `PlaceOrder` and the history views as specified above**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/app/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/app
