@@ -1,0 +1,46 @@
+{
+  "results": [
+    {
+      "province": "Madrid",
+      "provinceCode": "28",
+      "locality": "Móstoles",
+      "localityCode": "28000000001",
+      "streetType": "Calle",
+      "streetTypeCode": "1",
+      "street": "Ñandú",
+      "streetCode": "28000000123",
+      "municipality": "Móstoles",
+      "municipalityCode": "28000000001",
+      "number": "3",
+      "agencyCode": "0000000001",
+      "serviceCode": "SVC-153",
+      "placeId": "fixture-place-repsol",
+      "latitude": "",
+      "longitude": "",
+      "origin": "repsol",
+      "neutral": false,
+      "fullAddress": "Calle Ñandú 3, 28931 Móstoles, Madrid"
+    },
+    {
+      "province": "Madrid",
+      "provinceCode": "28",
+      "locality": "Móstoles",
+      "localityCode": "",
+      "streetType": "Calle",
+      "streetTypeCode": "",
+      "street": "Ñandú",
+      "streetCode": "",
+      "municipality": "Móstoles",
+      "municipalityCode": "",
+      "number": "3",
+      "agencyCode": "",
+      "serviceCode": "",
+      "placeId": "fixture-place-google",
+      "latitude": 40.4168,
+      "longitude": -3.7038,
+      "origin": "google",
+      "neutral": null,
+      "fullAddress": "Calle Ñandú 3, Móstoles"
+    }
+  ]
+}

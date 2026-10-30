@@ -1,0 +1,30 @@
+{
+  "province": "Madrid",
+  "provinceCode": "28",
+  "locality": "Móstoles",
+  "localityCode": "28000000001",
+  "streetType": "Calle",
+  "streetTypeCode": "1",
+  "street": "Ñandú",
+  "streetCode": "",
+  "municipality": "Móstoles",
+  "municipalityCode": "28000000001",
+  "number": "3",
+  "agencyCode": "0000000001",
+  "serviceCode": "",
+  "placeId": "fixture-place-google",
+  "latitude": 40.4168,
+  "longitude": -3.7038,
+  "origin": "google",
+  "neutral": true,
+  "fullAddress": "Calle Ñandú 3, 28931 Móstoles, Madrid",
+  "confidence": {
+    "number_not_found": false,
+    "agency_not_found": false,
+    "service_not_found": true,
+    "is_from_discarded_island": false,
+    "reference_policy_in_wrong_island": false
+  },
+  "currentFullAddress": "",
+  "currentStreet": ""
+}

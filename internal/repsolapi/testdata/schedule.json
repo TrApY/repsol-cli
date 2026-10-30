@@ -1,0 +1,17 @@
+[
+  {
+    "materialId": "153",
+    "dates": [
+      {
+        "id": "2",
+        "date": "2026-11-04"
+      },
+      {
+        "id": "1",
+        "date": "2026-11-02"
+      }
+    ],
+    "warning": false,
+    "type": "WEEKLY"
+  }
+]

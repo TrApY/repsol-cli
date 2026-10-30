@@ -1,0 +1,50 @@
+[
+  {
+    "id": "900",
+    "materialId": null,
+    "type": "Packaging",
+    "description": "Packaging material, not orderable",
+    "price": 0,
+    "pricePerKilo": 0
+  },
+  {
+    "id": "153",
+    "materialId": "153",
+    "type": "Butano 12.5kg",
+    "description": "Butano 12.5kg",
+    "price": 18.89,
+    "pricePerKilo": 1.5112
+  },
+  {
+    "id": "154",
+    "materialId": "154",
+    "type": "Butano 12kg - Ligera",
+    "description": "Butano 12kg - Ligera",
+    "price": 23.4,
+    "pricePerKilo": 1.95
+  },
+  {
+    "id": "239",
+    "materialId": "239",
+    "type": "Propano 11kg",
+    "description": "Propano 11kg",
+    "price": 18.89,
+    "pricePerKilo": 1.7173
+  },
+  {
+    "id": "210",
+    "materialId": "210",
+    "type": "Propano 35kg",
+    "description": "Propano 35kg",
+    "price": 88.7,
+    "pricePerKilo": 2.5343
+  },
+  {
+    "id": "230",
+    "materialId": "230",
+    "type": "Autogas 12kg - Carretillas",
+    "description": "Autogas 12kg - Carretillas",
+    "price": 26.6,
+    "pricePerKilo": 2.2167
+  }
+]
