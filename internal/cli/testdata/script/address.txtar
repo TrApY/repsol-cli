@@ -1,0 +1,22 @@
+# address show without a stored address is a usage error; an ambiguous street
+# lists its candidates and needs --pick; the picked address then serves the
+# catalog and the delivery schedule.
+! exec repsol --error-format json address show
+stderr '"code":"no_address"'
+stderr '"exit_code":2'
+
+! exec repsol address set 'Calle Ambigua'
+stderr '1\) Calle Ambigua 5'
+stderr '2\) Calle Ambigua 7'
+
+exec repsol address set 'Calle Ambigua' --pick 2
+stdout '"full_address": "Calle Ambigua 7, 28001 Pueblo, Madrid"'
+
+exec repsol address show
+stdout '"summary": "Calle Ambigua 7, 28001 Pueblo, Madrid"'
+
+exec repsol schedule list
+stdout '"dates": \[\s*"\d{4}-\d{2}-\d{2}",\s*"\d{4}-\d{2}-\d{2}"\s*\]'
+
+exec repsol catalog list
+stdout '"material_id": "153"'

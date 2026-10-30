@@ -1,5 +1,3 @@
-# An unknown command, a command that needs an address, an auth failure and an
-# invalid format each exit with their documented code.
 ! exec repsol frobnicate
 stderr 'repsol: unknown command'
 ! exec repsol --error-format json catalog list

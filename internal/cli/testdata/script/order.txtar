@@ -1,0 +1,26 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+stdout '"agency_code": "0000000001"'
+exec repsol order create --dry-run
+stdout '"dry_run": true'
+fake count /api/solicitude 0
+exec repsol order create
+stdout '"id": "800000000000000001"'
+stdout '"payment": "on_delivery"'
+! exec repsol --error-format json order create
+stderr '"code":"pending_order"'
+stderr '"exit_code":8'
+exec repsol order create --force
+fake count /api/solicitude 2
+exec repsol order list
+stdout '"pending": true'
+exec repsol order show 20000001
+stdout '"reference": "20000001"'
+! exec repsol --error-format json order create --qty 10 --force
+stderr '"exit_code":2'
+fake fail /api/solicitude 502
+! exec repsol --error-format json order create --force
+stderr '"exit_code":9'
+stderr 'repsol order last'
+fake count /api/solicitude 3

@@ -1863,7 +1863,7 @@ command:
 - "If it exits 9, do not retry. Run `repsol order last` and report what you see."
 - "Never put tokens or passwords on the command line."
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestDoctorAllGreen(t *testing.T) {
@@ -1927,20 +1927,20 @@ fake count /api/solicitude 3
 - `doctor` without a session → exit 1;
 - `completion bash` → stdout contains `bash completion`.
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/app/ ./internal/cli/`
 Expected: FAIL with `undefined: DoctorReport`, and the new scripts fail on unknown
 commands.
 
-- [ ] **Step 3: Implement the commands, `Doctor`, the pretty printers and `SKILL.md`**
+- [x] **Step 3: Implement the commands, `Doctor`, the pretty printers and `SKILL.md`**
 
-- [ ] **Step 4: Run all tests and confirm they pass**
+- [x] **Step 4: Run all tests and confirm they pass**
 
 Run: `go test -race ./...`
 Expected: `ok` for every package.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal cmd

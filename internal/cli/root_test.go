@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -45,5 +46,27 @@ func TestUsageError(t *testing.T) {
 	}
 	if !strings.Contains(got.Message, "unknown command") {
 		t.Fatalf("message = %q, want the original message", got.Message)
+	}
+}
+
+// TestRunRejectsBadFormatBeforeCommand checks that an invalid --format fails as
+// a usage error before the command runs: a write must never execute and then
+// fail while rendering.
+func TestRunRejectsBadFormatBeforeCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exit := Run(context.Background(), []string{"--format", "yaml", "auth", "status"}, System{
+		In:     strings.NewReader(""),
+		Out:    &stdout,
+		Err:    &stderr,
+		Getenv: func(string) string { return "" },
+	})
+	if exit != int(apperr.Usage) {
+		t.Fatalf("exit code = %d, want %d", exit, apperr.Usage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no data", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "repsol: ") {
+		t.Fatalf("stderr = %q, want the error message", stderr.String())
 	}
 }

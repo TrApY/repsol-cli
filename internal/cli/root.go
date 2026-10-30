@@ -31,6 +31,11 @@ type rootState struct {
 	// started reports whether PersistentPreRunE ran. An error before it is a
 	// usage error.
 	started bool
+	// outputFormat is the format PersistentPreRunE resolved. Resolving it
+	// before a command runs means a bad --format fails without side effects.
+	outputFormat output.Format
+	// errFormat is the error format PersistentPreRunE resolved.
+	errFormat output.ErrorFormat
 	// application is the App, built on first use by a command.
 	application *app.App
 }
@@ -39,6 +44,15 @@ type rootState struct {
 // printed to sys.Err as an error envelope, and the exit code follows the
 // category of the error.
 func Run(ctx context.Context, args []string, sys System) int {
+	if sys.In == nil {
+		sys.In = os.Stdin
+	}
+	if sys.Out == nil {
+		sys.Out = os.Stdout
+	}
+	if sys.Err == nil {
+		sys.Err = os.Stderr
+	}
 	if sys.Getenv == nil {
 		sys.Getenv = os.Getenv
 	}
@@ -62,10 +76,14 @@ func Run(ctx context.Context, args []string, sys System) int {
 	err = finalError(ctx, err)
 
 	// Cobra fails to find an unknown command before parsing any flag, so the
-	// error format flag is read from the raw arguments in that path.
-	errorFormat := state.errorFormat
-	if !state.started && errorFormat == "" {
-		errorFormat = errorFormatFromArgs(args)
+	// error format flag is read from the raw arguments in that path. When the
+	// pre-run hook resolved it, its value is authoritative.
+	errorFormat := string(state.errFormat)
+	if errorFormat == "" {
+		errorFormat = state.errorFormat
+		if !state.started && errorFormat == "" {
+			errorFormat = errorFormatFromArgs(args)
+		}
 	}
 	format, formatErr := output.ResolveErrorFormat(errorFormat, sys.Getenv("REPSOL_ERROR_FORMAT"))
 	if formatErr != nil {
@@ -100,12 +118,19 @@ func errorFormatFromArgs(args []string) string {
 
 // usageError converts an error raised before PersistentPreRunE ran, such as an
 // unknown command, flag or argument, into a usage error with the stable code
-// "usage". The original message is kept.
+// "usage". The original message and hint are kept; a wrapped cause is dropped,
+// so an internal detail never reaches the envelope.
 func usageError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return apperr.New(apperr.Usage, "usage", err.Error())
+	original := apperr.From(err)
+	if original.Category == apperr.Usage {
+		return original
+	}
+	out := apperr.New(apperr.Usage, "usage", original.Message)
+	out.Hint = original.Hint
+	return out
 }
 
 // finalError applies the interruption rule: a cancelled run reports
@@ -132,6 +157,21 @@ func newRoot(state *rootState) *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			state.started = true
+
+			// Resolve both formats before the command runs, so a bad value
+			// fails as a usage error without side effects and every later
+			// render or error uses the resolved form.
+			format, err := output.ResolveFormat(state.format, state.sys.OutTTY)
+			if err != nil {
+				return err
+			}
+			state.outputFormat = format
+
+			errFormat, err := output.ResolveErrorFormat(state.errorFormat, state.sys.Getenv("REPSOL_ERROR_FORMAT"))
+			if err != nil {
+				return err
+			}
+			state.errFormat = errFormat
 			return nil
 		},
 	}
@@ -148,7 +188,17 @@ func newRoot(state *rootState) *cobra.Command {
 	flags.StringVar(&state.errorFormat, "error-format", "",
 		`error format: "text" or "json"`)
 
-	root.AddCommand(newAuthCommand(state))
+	root.AddCommand(
+		newAuthCommand(state),
+		newAddressCommand(state),
+		newCatalogCommand(state),
+		newScheduleCommand(state),
+		newOrderCommand(state),
+		newDoctorCommand(state),
+		newConfigCommand(state),
+		newVersionCommand(state),
+		newSkillsCommand(state),
+	)
 	return root
 }
 
@@ -213,11 +263,17 @@ func baseURL(getenv func(string) string, key, fallback string) string {
 	return fallback
 }
 
-// render writes v to stdout in the resolved output format.
+// render writes v to stdout in the resolved output format. The format is
+// normally resolved by PersistentPreRunE; the fallback keeps render usable from
+// a command invoked outside Execute.
 func (s *rootState) render(v any) error {
-	format, err := output.ResolveFormat(s.format, s.sys.OutTTY)
-	if err != nil {
-		return err
+	format := s.outputFormat
+	if format == "" {
+		resolved, err := output.ResolveFormat(s.format, s.sys.OutTTY)
+		if err != nil {
+			return err
+		}
+		format = resolved
 	}
 	return output.Render(s.sys.Out, format, v)
 }

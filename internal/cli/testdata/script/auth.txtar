@@ -1,6 +1,3 @@
-# The HAR import stores a session, the token import reads a pasted line, the
-# email login stores the password, and logout removes the entry. The
-# credentials file is private.
 exec repsol auth login --har session.har
 stdout '"logged_in": true'
 stdout '"email": "owner@example.com"'

@@ -1,0 +1,31 @@
+# version, config, skills, doctor and completion cover the remaining commands.
+exec repsol version
+stdout '"version"'
+
+exec repsol config path
+stdout '"config"'
+stdout '"credentials"'
+
+exec repsol config set default_profile work
+exec repsol config get default_profile
+stdout 'work'
+
+exec repsol config list
+stdout 'work'
+
+! exec repsol --error-format json config set foo bar
+stderr '"code":"unknown_key"'
+stderr '"exit_code":2'
+
+exec repsol skills list
+stdout '"name": "repsol"'
+
+exec repsol skills get repsol
+stdout 'pending_order'
+
+! exec repsol --error-format json doctor
+stderr '"code":"doctor_failed"'
+stderr '"exit_code":1'
+
+exec repsol completion bash
+stdout 'bash completion'
