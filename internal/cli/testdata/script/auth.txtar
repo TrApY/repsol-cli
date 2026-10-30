@@ -1,0 +1,31 @@
+# The HAR import stores a session, the token import reads a pasted line, the
+# email login stores the password, and logout removes the entry. The
+# credentials file is private.
+exec repsol auth login --har session.har
+stdout '"logged_in": true'
+stdout '"email": "owner@example.com"'
+stderr 'repsol address set'
+filemode $WORK/.config/repsol-cli/credentials.toml 0600
+exec repsol auth status --check
+stdout '"session_valid": true'
+stdin session.txt
+exec repsol auth login --token-stdin --profile work
+stdout '"profile": "work"'
+stdin password.txt
+exec repsol auth login --email owner@example.com --password-stdin
+stdout '"password_stored": true'
+! exec repsol --error-format json auth login --email owner@example.com
+stderr '"code":"password_required"'
+! exec repsol --error-format json auth login
+stderr '"code":"login_method"'
+exec repsol auth logout
+stdout '"removed": true'
+
+-- session.har --
+{"log":{"entries":[{"startedDateTime":"2026-10-30T10:00:00Z","request":{"method":"POST","url":"https://accounts.eu1.gigya.com/accounts.getAccountInfo","headers":[{"name":"Cookie","value":"gmid=fake-gmid"}],"cookies":[],"postData":{"mimeType":"application/x-www-form-urlencoded","text":"login_token=fake-token&APIKey=k"}},"response":{"status":200,"content":{"text":"{}"}}}]}}
+
+-- session.txt --
+login_token=fake-token; gmid=fake-gmid
+
+-- password.txt --
+correct horse

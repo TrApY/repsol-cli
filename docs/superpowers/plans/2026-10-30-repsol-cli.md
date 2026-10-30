@@ -1711,7 +1711,7 @@ Auth commands:
     - `fake reject-token TOKEN`
     - `filemode PATH OCTAL`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestResolveFormat(t *testing.T) {
@@ -1784,21 +1784,21 @@ stderr '"exit_code":2'
 The `catalog list` line expects 2 now: before Task 12 it is an unknown command, and after
 Task 12 it needs an address. Both are exit 2.
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/output/ ./internal/cli/`
 Expected: FAIL with `undefined: ResolveFormat` / `undefined: Main`.
 
-- [ ] **Step 3: Implement `output`, the root, `prompt.go`, the auth commands and `cmd/repsol/main.go`**
+- [x] **Step 3: Implement `output`, the root, `prompt.go`, the auth commands and `cmd/repsol/main.go`**
 
 `cmd/repsol/main.go` is `func main() { os.Exit(cli.Main()) }`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/output/ ./internal/cli/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/output internal/cli cmd go.mod go.sum

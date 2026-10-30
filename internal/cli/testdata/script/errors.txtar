@@ -1,0 +1,12 @@
+# An unknown command, a command that needs an address, an auth failure and an
+# invalid format each exit with their documented code.
+! exec repsol frobnicate
+stderr 'repsol: unknown command'
+! exec repsol --error-format json catalog list
+stderr '"exit_code":2'
+env REPSOL_ERROR_FORMAT=json
+! exec repsol auth status --check
+stderr '"category":"auth"'
+stderr '"exit_code":3'
+! exec repsol --format yaml auth status
+stderr '"exit_code":2'
