@@ -629,7 +629,7 @@ git commit -m "feat(gigya): add account info, bootstrap, login and session impor
     and `func (c *Client) DeliverySchedule(ctx, materialID string, a Address) ([]Schedule, error)`
   - `func (c *Client) AddressMaps(ctx, a Address) (Address, error)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestAddressJSONWireTypes(t *testing.T) {
@@ -693,12 +693,12 @@ func TestAddressMapsEmptyBody(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/repsolapi/`
 Expected: FAIL with `undefined: Address`.
 
-- [ ] **Step 3: Implement the types, the places client and the public reads**
+- [x] **Step 3: Implement the types, the places client and the public reads**
 
 **Requests**
 - All are GETs with `Retry: true`. Endpoints are the paths below `/api` (for example
@@ -719,12 +719,12 @@ Expected: FAIL with `undefined: Address`.
 
 **`AddressMaps`** treats an empty body as a zero `Address`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/repsolapi/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/repsolapi go.mod go.sum
@@ -927,7 +927,7 @@ git commit -m "feat(repsolapi): add signed history, cart check and order writes 
     flag > env > `cfg.DefaultProfile` > `"default"`. Names must match
     `^[a-z0-9][a-z0-9_-]{0,31}$`, else `Usage` with code `invalid_profile`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func newStore(t *testing.T) Store {
@@ -973,12 +973,12 @@ func TestResolveProfile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/config/`
 Expected: FAIL with `undefined: Store`.
 
-- [ ] **Step 3: Implement the store**
+- [x] **Step 3: Implement the store**
 
 **Update functions** (both)
 - Take `flock.New(Paths.Lock).Lock()` and release it with defer.
@@ -991,12 +991,12 @@ Expected: FAIL with `undefined: Store`.
 **Load** of a missing file returns the zero value. A TOML parse error returns `Generic`
 with code `config_invalid`. The message names the path and never the content.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/config/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/config go.mod go.sum
