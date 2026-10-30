@@ -2159,7 +2159,7 @@ match with the value masked as `<V>`. When the docs were written, the matches we
 `Calle`, `string`, `subscription`, the catalog product names, and the owner's GitHub
 handle in the module path. Remove anything else from the repository before committing.
 
-tep 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md AGENTS.md docs .github .goreleaser.yaml .golangci.yml internal/live
