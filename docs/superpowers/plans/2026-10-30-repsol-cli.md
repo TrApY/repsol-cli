@@ -1360,7 +1360,7 @@ Product table: `butano`→153, `butano-ligera`→154, `propano`→239, `propano-
 sorted ascending. A `NO_AGENCY` mode or no dates → `Refused`, code
 `no_delivery_dates`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 func TestResolveProduct(t *testing.T) {
@@ -1399,19 +1399,19 @@ func TestScheduleSortedAndRefusals(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/app/ -run 'Product|Address|Catalog|Schedule'`
 Expected: FAIL with `undefined: ResolveProduct`.
 
-- [ ] **Step 3: Implement products, address, catalog and schedule as specified above**
+- [x] **Step 3: Implement products, address, catalog and schedule as specified above**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/app/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/app
