@@ -1,0 +1,49 @@
+version: 2
+
+project_name: repsol
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: repsol
+    main: ./cmd/repsol
+    binary: repsol
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/felipe9962/repsol-cli/internal/cli.Version={{ .Version }}
+      - -X github.com/felipe9962/repsol-cli/internal/cli.Commit={{ .Commit }}
+      - -X github.com/felipe9962/repsol-cli/internal/cli.Date={{ .Date }}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: repsol
+    ids:
+      - repsol
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
