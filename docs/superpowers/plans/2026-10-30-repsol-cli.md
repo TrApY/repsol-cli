@@ -790,7 +790,7 @@ git commit -m "feat(repsolapi): add wire types, address service and public reads
   - `func (c *Client) CreateSolicitude(ctx, r SolicitudeRequest) (Placed, error)`
   - `func (c *Client) CreateOrder(ctx, r OrderRequest) (Placed, error)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 type stubSigner struct{ err error }
@@ -855,12 +855,12 @@ func TestCheckCartNotRetried(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `go test ./internal/repsolapi/ -run 'History|Signer|Write|Cart'`
 Expected: FAIL with `undefined: HistoryEntry`.
 
-- [ ] **Step 3: Implement signing, history and writes**
+- [x] **Step 3: Implement signing, history and writes**
 
 **Authenticated requests**
 - Call `Signer.Sign` before building the request, and return its error unchanged.
@@ -884,12 +884,12 @@ Expected: FAIL with `undefined: HistoryEntry`.
   - an empty `externalId`.
 - Every other error passes through unchanged.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `go test -race ./internal/repsolapi/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/repsolapi
@@ -1058,7 +1058,7 @@ maps):
 | `POST /api/solicitude`, `POST /api/order` | Same auth. Responds with `Placed`: externalId ExternalID (`/order` uses `…002`), plus the request's deliveryDate, quantity and unitPrice, material `"Butano 12.5kg"`, and agency `{"Agencia Test","900 000 000","900 000 001"}`. Prepends a `HistoryEntry` (referenceSAC `"2000000N"` counting from 1, AgencyCode, the request address's LocalityCode, materialId, deliveryDate). |
 | any | When `FailNext(path, status)` is armed for the path, the next request gets that status and an empty body. Every request is recorded. |
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestFakeAgreesWithClients(t *testing.T) {
@@ -1076,21 +1076,21 @@ func TestFakeAgreesWithClients(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `go test ./internal/fakerepsol/`
 Expected: FAIL with `undefined: New`.
 
-- [ ] **Step 3: Implement the fake per the table**
+- [x] **Step 3: Implement the fake per the table**
 
 Use one `http.ServeMux` and one mutex around the state.
 
-- [ ] **Step 4: Run the test and confirm it passes**
+- [x] **Step 4: Run the test and confirm it passes**
 
 Run: `go test -race ./internal/fakerepsol/`
 Expected: `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/fakerepsol
@@ -2127,12 +2127,12 @@ git commit -m "feat(mcp): add MCP server tools and harness install"
   - `DeliverySchedule` has at least one date.
 - It logs only counts and booleans, never values.
 
-- [ ] **Step 1: Write the live test, then confirm it compiles and skips**
+- [x] **Step 1: Write the live test, then confirm it compiles and skips**
 
 Run: `go vet -tags live ./internal/live/ && go test -tags live ./internal/live/ -v`
 Expected: `--- SKIP: TestLiveReadOnly`.
 
-- [ ] **Step 2: Write the docs, workflows, goreleaser and golangci config**
+- [x] **Step 2: Write the docs, workflows, goreleaser and golangci config**
 
 - [ ] **Step 3: Verify the build and the test suite**
 
