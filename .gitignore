@@ -1,0 +1,4 @@
+/bin/
+/dist/
+*.har
+coverage.out
