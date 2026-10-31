@@ -47,3 +47,8 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+release:
+  github:
+    owner: felipe9962
+    name: repsol-cli
