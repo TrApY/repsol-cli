@@ -209,6 +209,9 @@ Errors: `invalid_quantity` (exit 2, above the per-material maximum), `unknown_pr
 `date_unavailable` (exit 8, the date is not offered), `product_unavailable`
 (exit 8), `no_delivery_dates` (exit 8), `online_policy_required` (exit 8, order
 on the web), `pending_order` (exit 8, a delivery is already pending),
+`order_in_progress` (exit 8, another order for the profile is being placed; do
+not retry, run `repsol order last` once it finishes; `--force` does not
+override it; `--dry-run` does not take the lock),
 `order_outcome_unknown` (exit 9, run `repsol order last` before retrying).
 
 ### `repsol order list [--limit N]`

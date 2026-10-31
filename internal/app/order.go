@@ -133,6 +133,16 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		return OrderResult{}, err
 	}
 
+	// The lock covers the pending guard, the cart check and the write, so two
+	// orders started at the same time cannot both pass the guard.
+	if !in.DryRun {
+		release, err := a.lockOrder()
+		if err != nil {
+			return OrderResult{}, err
+		}
+		defer release()
+	}
+
 	if !in.Force {
 		if err := a.ensureNoPendingOrder(ctx, agencyCode, addr.LocalityCode); err != nil {
 			return OrderResult{}, err
@@ -295,6 +305,22 @@ func chooseDeliveryDate(schedule repsolapi.Schedule, want string) (repsolapi.Del
 	return repsolapi.DeliveryDate{}, apperr.New(apperr.Refused, "date_unavailable",
 		fmt.Sprintf("the agency does not offer %s; offered: %s", want, strings.Join(offered, ", "))).
 		WithHint("run \"repsol schedule list\" to see the offered dates")
+}
+
+// lockOrder takes the profile's order lock, or refuses the order when another
+// one is being placed. A refused order stops before the cart check and the
+// write.
+func (a *App) lockOrder() (func(), error) {
+	release, ok, err := a.store.TryLockOrder(a.profile)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, apperr.New(apperr.Refused, "order_in_progress",
+			"another order is being placed for this profile").
+			WithHint("do not retry; run \"repsol order last\" once it finishes")
+	}
+	return release, nil
 }
 
 // ensureNoPendingOrder refuses an order when the history holds a pending

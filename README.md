@@ -101,6 +101,10 @@ stop accidental duplicates, not to ask permission: a delivery you cancelled by
 phone still looks pending until its date passes, and `--force` covers that case
 when you explicitly want another delivery.
 
+Only one order per profile is placed at a time, even with `--force`. A second
+`order create` started while one is running exits 8 with `order_in_progress`
+before the cart check and the order request; check `repsol order last` instead of retrying.
+
 ## Agent setup
 
 ```bash
@@ -130,7 +134,7 @@ is JSON when stdout is not a terminal, and `pretty` when it is. Override it with
 | 5 | blocked or rate limited |
 | 6 | network or timeout (reads) |
 | 7 | API changed: unexpected status or shape |
-| 8 | refused: pending order, no delivery to this address, product unavailable |
+| 8 | refused: pending order, order in progress, no delivery to this address, product unavailable |
 | 9 | order outcome unknown: check `repsol order last` before retrying |
 | 130 | interrupted |
 

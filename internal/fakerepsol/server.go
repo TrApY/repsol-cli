@@ -99,6 +99,13 @@ type Server struct {
 	check    repsolapi.CartCheck
 	agency   string
 	writes   int
+	held     map[string]*hold
+}
+
+// hold parks the next request to a path until the test releases it.
+type hold struct {
+	entered chan struct{}
+	release chan struct{}
 }
 
 // New starts the fake on its own loopback server. Close it when done.
@@ -107,6 +114,7 @@ func New() *Server {
 		recorded: make(map[string][]Recorded),
 		rejected: make(map[string]bool),
 		failNext: make(map[string]int),
+		held:     make(map[string]*hold),
 		check:    repsolapi.CartCheck{Status: "EE04", OrderType: "SOLICITUDE"},
 		agency:   AgencyCode,
 	}
@@ -206,6 +214,18 @@ func (s *Server) FailNext(path string, status int) {
 	s.failNext[path] = status
 }
 
+// Hold parks the next request to path after it is recorded and before it is
+// answered. entered is closed once that request arrives; release lets it go on
+// and may be called more than once.
+func (s *Server) Hold(path string) (entered <-chan struct{}, release func()) {
+	h := &hold{entered: make(chan struct{}), release: make(chan struct{})}
+	s.mu.Lock()
+	s.held[path] = h
+	s.mu.Unlock()
+	var once sync.Once
+	return h.entered, func() { once.Do(func() { close(h.release) }) }
+}
+
 // Requests returns the recorded requests for path, in arrival order. Path is a
 // full server path such as "/api/solicitude".
 func (s *Server) Requests(path string) []Recorded {
@@ -234,6 +254,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	s.record(r, body)
+
+	if h := s.takeHold(r.URL.Path); h != nil {
+		close(h.entered)
+		select {
+		case <-h.release:
+		case <-r.Context().Done():
+			return
+		}
+	}
 
 	if status, ok := s.takeFailure(r.URL.Path); ok {
 		w.WriteHeader(status)
@@ -264,6 +293,15 @@ func (s *Server) record(r *http.Request, body []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recorded[r.URL.Path] = append(s.recorded[r.URL.Path], rec)
+}
+
+// takeHold consumes an armed hold for path, if there is one.
+func (s *Server) takeHold(path string) *hold {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.held[path]
+	delete(s.held, path)
+	return h
 }
 
 // takeFailure consumes an armed failure for path, if there is one.

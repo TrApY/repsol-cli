@@ -239,6 +239,48 @@ func TestDeleteCredentials(t *testing.T) {
 	}
 }
 
+func TestTryLockOrder(t *testing.T) {
+	s := newStore(t)
+
+	release, ok, err := s.TryLockOrder("default")
+	if err != nil || !ok {
+		t.Fatalf("first TryLockOrder = %v, %v, want true, nil", ok, err)
+	}
+
+	if _, ok, err := s.TryLockOrder("default"); err != nil || ok {
+		t.Fatalf("TryLockOrder while held = %v, %v, want false, nil", ok, err)
+	}
+
+	// Another profile has a lock of its own.
+	other, ok, err := s.TryLockOrder("work")
+	if err != nil || !ok {
+		t.Fatalf("TryLockOrder(work) = %v, %v, want true, nil", ok, err)
+	}
+	other()
+
+	// A re-login during an order writes the credentials under the store lock,
+	// which must not wait for the order lock.
+	if err := s.UpdateCredentials("default", func(c *Credentials) error {
+		c.LoginToken = "renewed"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateCredentials while the order lock is held: %v", err)
+	}
+
+	release()
+	again, ok, err := s.TryLockOrder("default")
+	if err != nil || !ok {
+		t.Fatalf("TryLockOrder after release = %v, %v, want true, nil", ok, err)
+	}
+	again()
+
+	_, _, err = s.TryLockOrder("../escape")
+	var typed *apperr.Error
+	if !errors.As(err, &typed) || typed.Code != "invalid_profile" {
+		t.Fatalf("TryLockOrder(../escape) error = %v, want invalid_profile", err)
+	}
+}
+
 func TestResolveProfile(t *testing.T) {
 	tests := []struct {
 		name    string

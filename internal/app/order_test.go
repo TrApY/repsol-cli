@@ -242,6 +242,69 @@ func TestPendingGuardBlocks(t *testing.T) {
 	}
 }
 
+func TestPlaceOrderRefusesConcurrentOrder(t *testing.T) {
+	ctx := context.Background()
+	a, fake, _, _ := newOrderApp(t)
+
+	entered, release := fake.Hold("/api/solicitude")
+	t.Cleanup(release)
+
+	type outcome struct {
+		res OrderResult
+		err error
+	}
+	first := make(chan outcome, 1)
+	go func() {
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1})
+		first <- outcome{res, err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first order never reached /api/solicitude")
+	}
+
+	checks := fake.Count("/api/cart/check")
+	for _, in := range []PlaceOrderInput{
+		{Quantity: 1},
+		{Quantity: 1, Force: true},
+	} {
+		_, err := a.PlaceOrder(ctx, in)
+		typed := requireErrorCode(t, err, "order_in_progress")
+		if typed.Category != apperr.Refused {
+			t.Errorf("force=%v: category = %v, want %v", in.Force, typed.Category, apperr.Refused)
+		}
+		if !strings.Contains(typed.Hint, "repsol order last") {
+			t.Errorf("force=%v: hint %q does not mention repsol order last", in.Force, typed.Hint)
+		}
+	}
+	if got := fake.Count("/api/cart/check"); got != checks {
+		t.Errorf("/api/cart/check requests = %d, want %d: a refused order reached the cart check", got, checks)
+	}
+
+	// A dry run places nothing, so it does not wait for the lock.
+	if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, DryRun: true}); err != nil {
+		t.Fatalf("dry run during an order: %v", err)
+	}
+
+	release()
+	got := <-first
+	if got.err != nil {
+		t.Fatalf("first order: %v", got.err)
+	}
+	if got.res.ID != fakerepsol.ExternalID {
+		t.Errorf("first order id = %q, want %q", got.res.ID, fakerepsol.ExternalID)
+	}
+	if n := fake.Count("/api/solicitude"); n != 1 {
+		t.Errorf("/api/solicitude requests = %d, want 1", n)
+	}
+
+	// The lock is released when the order returns.
+	if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Force: true}); err != nil {
+		t.Fatalf("order after the first one finished: %v", err)
+	}
+}
+
 func TestPendingGuardScope(t *testing.T) {
 	ctx := context.Background()
 

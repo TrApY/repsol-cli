@@ -171,6 +171,33 @@ func (s Store) lock() (func(), error) {
 	return func() { _ = l.Unlock() }, nil
 }
 
+// TryLockOrder takes the order lock of a profile without waiting. It reports
+// false when another process or goroutine already holds it. The lock is a file
+// of its own next to the store lock, because a re-login during an order takes
+// the store lock and a second lock on the same file would wait for itself.
+func (s Store) TryLockOrder(profile string) (func(), bool, error) {
+	if !profilePattern.MatchString(profile) {
+		return nil, false, apperr.New(apperr.Usage, "invalid_profile",
+			fmt.Sprintf("invalid profile name %q", profile))
+	}
+	dir := filepath.Dir(s.Paths.Lock)
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return nil, false, apperr.New(apperr.Generic, "config_write_failed",
+			fmt.Sprintf("create directory %s", dir)).WithCause(err)
+	}
+	path := filepath.Join(dir, "order-"+profile+".lock")
+	l := flock.New(path)
+	ok, err := l.TryLock()
+	if err != nil {
+		return nil, false, apperr.New(apperr.Generic, "config_lock_failed",
+			fmt.Sprintf("lock %s", path)).WithCause(err)
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	return func() { _ = l.Unlock() }, true, nil
+}
+
 // loadFile decodes a TOML file into dst. A missing file leaves dst untouched
 // and is not an error.
 func loadFile(path string, dst any) error {

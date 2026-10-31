@@ -36,6 +36,10 @@ quantity, the price, the delivery date and the address.
 
 If it exits 8 with code `pending_order`, tell the owner which order is pending. Pass `--force` only when the owner explicitly asks for another delivery while one is pending. A delivery cancelled by phone still shows as pending until its date passes.
 
+## Order in progress
+
+If it exits 8 with code `order_in_progress`, another order is being placed for the same profile. Do not retry and do not pass `--force`; run `repsol order last` once it finishes and report what you see.
+
 ## Unknown order outcome
 
 If it exits 9, do not retry. Run `repsol order last` and report what you see.
