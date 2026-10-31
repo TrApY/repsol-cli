@@ -71,7 +71,10 @@ func TestRedactBodyCoversSensitiveKeys(t *testing.T) {
 		"name", "nif", "street", "number", "floor", "door", "details", "placeid",
 		"fulladdress", "autocompletecontent", "currentfulladdress", "currentstreet",
 		"latitude", "longitude", "location", "input", "externalid", "referencesac",
-		"postalcode", "riskcontext", "sessioninfo",
+		"postalcode", "riskcontext", "sessioninfo", "emails", "loginids", "userinfo",
+		"identities", "nickname", "uidsig", "loginprovideruid", "provideruid",
+		"address", "agency", "locality", "localitycode", "municipality",
+		"municipalitycode", "streetcode",
 	}
 
 	values := url.Values{}
@@ -137,7 +140,7 @@ func TestRedactBodyJSON(t *testing.T) {
 		`"profile":"REDACTED"`,
 		`"data":"REDACTED"`,
 		`"phones":"REDACTED"`,
-		`"address":{"number":"REDACTED","street":"REDACTED"}`,
+		`"address":"REDACTED"`,
 		`"sessionInfo":"REDACTED"`,
 		`"result":{"code":"ok","uid":"REDACTED"}`,
 		`"errorCode":0`,

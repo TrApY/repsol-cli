@@ -242,7 +242,12 @@ func TestDebugLogRedactsSecrets(t *testing.T) {
 		`"profile":{"email":"me@example.com"},` +
 		`"data":{"DocID":{"Pers":"12345678Z"}},` +
 		`"sessionInfo":{"login_token":"st2.SECRET"},` +
-		`"address":{"street":"Calle SECRET","number":"7"}}`
+		`"address":{"street":"Calle SECRET","number":"7","localityCode":"loc-SECRET"},` +
+		`"emails":{"verified":["owner@example.com"],"unverified":[]},` +
+		`"userInfo":{"UIDSig":"uidsig-SECRET","nickname":"Owner SECRET",` +
+		`"loginProviderUID":"lpuid-SECRET",` +
+		`"identities":[{"provider":"site","providerUID":"puid-SECRET","nickname":"Owner SECRET"}]},` +
+		`"localityCode":"loc-SECRET","streetCode":"street-SECRET","agencyCode":"0000000001"}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -270,13 +275,16 @@ func TestDebugLogRedactsSecrets(t *testing.T) {
 	}
 
 	out := buf.String()
-	for _, s := range []string{"SECRET", "me@example.com", "me%40example.com", "12345678Z"} {
+	for _, s := range []string{"SECRET", "me@example.com", "me%40example.com", "owner@example.com", "12345678Z"} {
 		if strings.Contains(out, s) {
 			t.Fatalf("debug log leaks %q:\n%s", s, out)
 		}
 	}
 	if !strings.Contains(out, "REDACTED") {
 		t.Fatalf("debug log missing the redaction marker:\n%s", out)
+	}
+	if !strings.Contains(out, "0000000001") {
+		t.Fatalf("debug log dropped the non-sensitive agency code:\n%s", out)
 	}
 	if !strings.Contains(out, "/accounts.login") {
 		t.Fatalf("debug log missing the request path:\n%s", out)

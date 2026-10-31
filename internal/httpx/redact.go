@@ -55,6 +55,25 @@ var sensitiveKeys = map[string]struct{}{
 	"postalcode":          {},
 	"riskcontext":         {},
 	"sessioninfo":         {},
+	// The Gigya login answers with the account email, name and provider ids
+	// outside the profile, because the CLI asks it to include them.
+	"emails":           {},
+	"loginids":         {},
+	"userinfo":         {},
+	"identities":       {},
+	"nickname":         {},
+	"uidsig":           {},
+	"loginprovideruid": {},
+	"provideruid":      {},
+	// The town and street codes of the delivery address. The address and
+	// agency objects are dropped whole, so their partial history copies go too.
+	"address":          {},
+	"agency":           {},
+	"locality":         {},
+	"localitycode":     {},
+	"municipality":     {},
+	"municipalitycode": {},
+	"streetcode":       {},
 }
 
 // isSensitiveKey reports whether a query, header, JSON or form key holds a
