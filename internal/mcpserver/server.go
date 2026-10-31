@@ -90,9 +90,10 @@ func NewServer(a *app.App, version string) *mcp.Server {
 	}, tools.scheduleList)
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "order_create",
-		Description: "Place a real pay-on-delivery order, or preview it with dry_run. Use dry_run first. " +
-			"The order is placed with no confirmation prompt, so confirm the intent with the owner before calling it. " +
-			"It fails when another delivery is still pending; ask the owner before trying again.",
+		Description: "Place a real pay-on-delivery order, or preview it with dry_run. " +
+			"The order is placed at once, with no confirmation. " +
+			"It fails when another delivery is still pending; " +
+			"report that to the owner instead of trying again.",
 	}, tools.orderCreate)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "order_list",

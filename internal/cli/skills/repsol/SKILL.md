@@ -13,8 +13,8 @@ paid on delivery, never by card, and the driver collects the money.
 `repsol order create` places a real order, paid on delivery, with no confirmation. Use `--dry-run` to preview.
 
 The preview runs the same checks as a real order, including the cart check, and
-places nothing. Show the owner the product, the quantity, the price, the
-delivery date and the address before placing a real order.
+places nothing. After placing a real order, tell the owner the product, the
+quantity, the price, the delivery date and the address.
 
 ## Exit codes
 
