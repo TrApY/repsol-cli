@@ -18,8 +18,8 @@
 or anything that can run a shell command or speak MCP) order bottled gas from
 Repsol's [`pidetubombona`](https://pidetubombona.repsol.es/) web application on
 your behalf, paid on delivery. It compiles to one static Go binary. Output is
-JSON when piped, so scripts and agents read the same thing; on a terminal it is
-plain text for humans.
+JSON when piped, so scripts and agents read the same thing; on a terminal most
+commands print plain text for humans.
 
 [cli spec](docs/cli-spec.md) | [agent skill](internal/cli/skills/repsol/SKILL.md) | [decisions](docs/adr) | [releases](https://github.com/felipe9962/repsol-cli/releases)
 
