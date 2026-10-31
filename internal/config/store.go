@@ -87,7 +87,7 @@ func (s Store) UpdateConfig(fn func(*Config) error) error {
 	if err != nil {
 		return writeFailed(s.Paths.Config, err)
 	}
-	return writeAtomic(s.Paths.Config, configMode, data)
+	return WriteAtomic(s.Paths.Config, configMode, data)
 }
 
 // LoadCredentials reads the entry of one profile. found is false when the
@@ -151,7 +151,7 @@ func (s Store) writeCredentials(f credentialsFile) error {
 	if err != nil {
 		return writeFailed(s.Paths.Credentials, err)
 	}
-	return writeAtomic(s.Paths.Credentials, privateMode, data)
+	return WriteAtomic(s.Paths.Credentials, privateMode, data)
 }
 
 // lock creates the application directory, then takes the exclusive file lock.
@@ -192,11 +192,11 @@ func loadFile(path string, dst any) error {
 	return nil
 }
 
-// writeAtomic writes data to path through a temporary file in the same
-// directory, then renames it into place. The temporary file is created 0600
-// and chmodded to perm before the rename, so the destination is never visible
-// with wider permissions.
-func writeAtomic(path string, perm fs.FileMode, data []byte) error {
+// WriteAtomic writes data to path through a temporary file in the same
+// directory, then renames it into place, so a reader never sees a partial
+// file. The temporary file is created 0600 and chmodded to perm before the
+// rename, so the destination is never visible with wider permissions.
+func WriteAtomic(path string, perm fs.FileMode, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return apperr.New(apperr.Generic, "config_write_failed",

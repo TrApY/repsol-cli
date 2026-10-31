@@ -14,6 +14,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/felipe9962/repsol-cli/internal/apperr"
+	"github.com/felipe9962/repsol-cli/internal/config"
 )
 
 // The install targets.
@@ -115,8 +116,13 @@ func requireHome(home string) (string, error) {
 
 // installJSON writes the entry under mcpServers.repsol of a JSON configuration,
 // keeping every other key and the mode of an existing file.
+//
+// Every value but the repsol entry is kept as raw JSON, so numbers, nested key
+// order and escapes survive byte for byte. Claude Code keeps its whole state in
+// ~/.claude.json, and decoding it into generic values would round large
+// integers through float64.
 func installJSON(target, path string, entry map[string]any) (InstallResult, error) {
-	doc := map[string]any{}
+	doc := map[string]json.RawMessage{}
 	mode := fs.FileMode(0o600)
 
 	data, err := os.ReadFile(path)
@@ -132,22 +138,24 @@ func installJSON(target, path string, entry map[string]any) (InstallResult, erro
 		}
 		if doc == nil {
 			// A file holding "null" decodes to a nil map.
-			doc = map[string]any{}
+			doc = map[string]json.RawMessage{}
 		}
 	case errors.Is(err, fs.ErrNotExist):
 	default:
 		return InstallResult{}, configReadError(path, err)
 	}
 
-	servers := map[string]any{}
-	switch raw := doc["mcpServers"].(type) {
-	case nil:
-	case map[string]any:
-		servers = raw
-	default:
-		return InstallResult{}, apperr.New(apperr.Usage, "harness_config_invalid",
-			fmt.Sprintf("%s has an mcpServers value that is not an object", path)).
-			WithHint("edit " + path + " by hand")
+	servers := map[string]json.RawMessage{}
+	if raw, ok := doc["mcpServers"]; ok {
+		if err := json.Unmarshal(raw, &servers); err != nil {
+			return InstallResult{}, apperr.New(apperr.Usage, "harness_config_invalid",
+				fmt.Sprintf("%s has an mcpServers value that is not an object", path)).
+				WithHint("edit " + path + " by hand")
+		}
+		if servers == nil {
+			// "mcpServers": null decodes to a nil map.
+			servers = map[string]json.RawMessage{}
+		}
 	}
 
 	result := InstallResult{Target: target, Path: path, Status: statusInstalled}
@@ -159,27 +167,55 @@ func installJSON(target, path string, entry map[string]any) (InstallResult, erro
 		result.Status = statusUpdated
 	}
 
-	servers["repsol"] = entry
-	doc["mcpServers"] = servers
-
-	out, err := json.MarshalIndent(doc, "", "  ")
+	encodedEntry, err := encodeJSON(entry, "")
 	if err != nil {
-		return InstallResult{}, apperr.New(apperr.Generic, "install_failed",
-			fmt.Sprintf("%s could not be encoded", path)).WithCause(err)
+		return InstallResult{}, encodeError(path, err)
 	}
-	out = append(out, '\n')
+	servers["repsol"] = encodedEntry
+	encodedServers, err := encodeJSON(servers, "")
+	if err != nil {
+		return InstallResult{}, encodeError(path, err)
+	}
+	doc["mcpServers"] = encodedServers
+
+	out, err := encodeJSON(doc, "  ")
+	if err != nil {
+		return InstallResult{}, encodeError(path, err)
+	}
 	if err := writeConfig(path, out, mode); err != nil {
 		return InstallResult{}, err
 	}
 	return result, nil
 }
 
+// encodeJSON encodes v with a trailing newline and without escaping <, > and &,
+// so the strings of a raw value are written back as they were read. indent
+// empty means compact.
+func encodeJSON(v any, indent string) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if indent != "" {
+		enc.SetIndent("", indent)
+	}
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// encodeError is the error of a configuration that could not be encoded.
+func encodeError(path string, err error) error {
+	return apperr.New(apperr.Generic, "install_failed",
+		fmt.Sprintf("%s could not be encoded", path)).WithCause(err)
+}
+
 // sameJSONEntry reports whether existing already has the command and args the
 // caller wants. An install is unchanged when they match, whatever other keys
 // the entry carries.
-func sameJSONEntry(existing any, want map[string]any) bool {
-	entry, ok := existing.(map[string]any)
-	if !ok {
+func sameJSONEntry(existing json.RawMessage, want map[string]any) bool {
+	var entry map[string]any
+	if err := json.Unmarshal(existing, &entry); err != nil || entry == nil {
 		return false
 	}
 	for _, key := range []string{"command", "args"} {
@@ -354,15 +390,16 @@ func tomlString(s string) string {
 	return `"` + replacer.Replace(s) + `"`
 }
 
-// writeConfig creates the parent directory with a private mode and writes data
-// to path, keeping the mode of an existing file.
+// writeConfig creates the parent directory with a private mode and replaces
+// path atomically with data, keeping the mode of an existing file. A harness
+// reading the file meanwhile sees the old or the new content, never a partial
+// one. A symbolic link, such as a dotfiles checkout, is followed, so the link
+// survives and its target is the file that changes.
 func writeConfig(path string, data []byte, mode fs.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return apperr.New(apperr.Generic, "install_failed",
-			fmt.Sprintf("the directory %s could not be created", dir)).WithCause(err)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
 	}
-	if err := os.WriteFile(path, data, mode); err != nil {
+	if err := config.WriteAtomic(path, mode, data); err != nil {
 		return apperr.New(apperr.Generic, "install_failed",
 			fmt.Sprintf("%s could not be written", path)).WithCause(err)
 	}

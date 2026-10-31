@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -112,6 +113,88 @@ func TestInstallClaudeCode(t *testing.T) {
 	}
 	if doc["theme"] != "dark" {
 		t.Errorf("theme = %v after update, want %q", doc["theme"], "dark")
+	}
+}
+
+func TestInstallClaudeCodeKeepsOtherValuesExactly(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude.json")
+	// A large integer would lose precision through float64, and the nested
+	// object's key order and the escaped-looking string must come back as
+	// written.
+	const original = `{"counter":9007199254740993,` +
+		`"projects":{"/b":{"z":1,"a":2},"/a":{"note":"a<b & c>d"}},` +
+		`"mcpServers":{"other":{"command":"x","env":{"Z":"1","A":"2"}}}}`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := Install("claude-code", "/opt/repsol", []string{"mcp"}, home, noEnv)
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	requireStatus(t, result, "installed")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, data); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	out := compacted.String()
+	for _, want := range []string{
+		`"counter":9007199254740993`,
+		`"/b":{"z":1,"a":2}`,
+		`"note":"a<b & c>d"`,
+		`"other":{"command":"x","env":{"Z":"1","A":"2"}}`,
+		`"repsol":{"args":["mcp"],"command":"/opt/repsol","type":"stdio"}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rewritten file is missing %s:\n%s", want, out)
+		}
+	}
+}
+
+func TestInstallFollowsSymlink(t *testing.T) {
+	home := t.TempDir()
+	target := filepath.Join(home, "dotfiles", "claude.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(target, []byte(`{"theme":"dark"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	link := filepath.Join(home, ".claude.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks are not available: %v", err)
+	}
+
+	if _, err := Install("claude-code", "/opt/repsol", []string{"mcp"}, home, noEnv); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is no longer a symbolic link", link)
+	}
+	doc := readJSONFile(t, target)
+	if doc["theme"] != "dark" {
+		t.Errorf("theme = %v, want %q", doc["theme"], "dark")
+	}
+	if _, ok := doc["mcpServers"].(map[string]any)["repsol"]; !ok {
+		t.Error("the link target has no repsol entry")
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if got := targetInfo.Mode().Perm(); got != 0o644 {
+		t.Errorf("target mode = %o, want 0644", got)
 	}
 }
 
