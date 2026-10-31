@@ -1,5 +1,8 @@
 /bin/
 /dist/
+# Real HAR captures hold secrets and personal data. The synthetic fixtures
+# are the only exception.
 *.har
+!internal/gigya/testdata/*.har
 coverage.out
 .DS_Store
