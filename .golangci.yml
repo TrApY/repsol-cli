@@ -8,6 +8,17 @@ linters:
     - ineffassign
     - unused
     - misspell
+  exclusions:
+    presets:
+      # Unchecked Close, Fprint and os.Remove: nothing useful to do with
+      # their error.
+      - std-error-handling
+    rules:
+      # Test helpers return the typed error for further checks, and test
+      # handlers write canned bodies.
+      - path: _test\.go
+        linters:
+          - errcheck
 
 formatters:
   enable:

@@ -264,8 +264,8 @@ func statusError(method, endpoint string, status int) *apperr.Error {
 	case status == http.StatusUnauthorized:
 		appErr = apperr.New(apperr.Auth, "unauthorized", message)
 	case status == http.StatusForbidden:
-		appErr = apperr.New(apperr.Blocked, "forbidden", message)
-		appErr.WithHint(`Repsol's firewall or session refused the request; run "repsol auth status --check"`)
+		appErr = apperr.New(apperr.Blocked, "forbidden", message).
+			WithHint(`Repsol's firewall or session refused the request; run "repsol auth status --check"`)
 	case status == http.StatusNotFound:
 		appErr = apperr.New(apperr.NotFound, "not_found", message)
 	case status == http.StatusTooManyRequests:

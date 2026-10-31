@@ -87,9 +87,6 @@ func (s *Server) handleOrderHistory(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && limit < len(history) {
 		history = history[:limit]
 	}
-	if history == nil {
-		history = []repsolapi.HistoryEntry{}
-	}
 	writeJSON(w, http.StatusOK, history)
 }
 
