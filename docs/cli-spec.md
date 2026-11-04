@@ -200,9 +200,15 @@ Dates are sorted ascending. Without a stored address it exits 2
   "delivery_date": "2026-11-04",
   "address": "Calle Falsa 1, 28001 Pueblo, Madrid",
   "agency": {"name": "Agencia Test", "phone": "900 000 000", "code": "0000000001"},
-  "payment": "on_delivery"
+  "payment": "on_delivery",
+  "note": "this is an order request, not a confirmed order: …"
 }
 ```
+
+`note` is set when `order_type` is `SOLICITUDE`, on a dry run too. A solicitude
+is a request that Repsol's order office or the agency validates by hand. They
+may email or call the owner to identify the contract holder before delivering,
+and nothing in the API reports that the request is on hold.
 
 Errors: `invalid_quantity` (exit 2, above the per-material maximum), `unknown_product`
 (exit 2), `invalid_date` (exit 2), `unsupported_payment` (exit 2),
@@ -235,6 +241,10 @@ Default limit 10, maximum 100.
   }
 ]
 ```
+
+The history has no status field. `pending` only means that `delivery_date` is
+today or later in `Europe/Madrid`: it does not mean the order was confirmed, and
+a request on hold or cancelled by phone still shows as pending.
 
 ### `repsol order last`
 

@@ -93,11 +93,13 @@ func NewServer(a *app.App, version string) *mcp.Server {
 		Description: "Place a real pay-on-delivery order, or preview it with dry_run. " +
 			"The order is placed at once, with no confirmation. " +
 			"It fails when another delivery is still pending or another order is being placed; " +
-			"report that to the owner instead of trying again.",
+			"report that to the owner instead of trying again. " +
+			"When the result has a note, pass it on to the owner.",
 	}, tools.orderCreate)
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "order_list",
-		Description: "List the newest orders of the profile, newest first, with their delivery dates and pending flag.",
+		Name: "order_list",
+		Description: "List the newest orders of the profile, newest first, with their delivery dates and pending flag. " +
+			"Pending only means the delivery date has not passed; it does not mean the order was confirmed.",
 	}, tools.orderList)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "order_last",

@@ -179,6 +179,17 @@ stop accidental duplicates, not to ask permission: a delivery you cancelled by
 phone still looks pending until its date passes, and `--force` covers that case
 when you explicitly want another delivery.
 
+### Order requests are not confirmed orders
+
+When the result says `order type: SOLICITUDE`, Repsol has received an order
+**request**, not a confirmed order. Repsol's order office or the agency validates it by hand
+and may email or call you first, for example to identify the holder of the
+supply contract. The CLI prints a `note` saying so, but it cannot tell you
+whether that has happened: Repsol's API has no order status, so
+`repsol order list` marks an order as `pending` only because its delivery date
+has not passed yet. If Repsol contacts you, answer them; the CLI cannot do it
+for you.
+
 Only one order per profile is placed at a time, even with `--force`. A second
 `order create` started while one is running exits 8 with `order_in_progress`
 before the cart check and the order request; check `repsol order last` instead

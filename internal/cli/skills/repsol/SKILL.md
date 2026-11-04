@@ -16,6 +16,11 @@ The preview runs the same checks as a real order, including the cart check, and
 places nothing. After placing a real order, tell the owner the product, the
 quantity, the price, the delivery date and the address.
 
+When the result has a `note` (order type `SOLICITUDE`), pass it on: the order is
+a request that Repsol may hold until the owner answers an email or a call that
+identifies the contract holder. `pending: true` in the history only means the
+delivery date has not passed, not that the order was confirmed.
+
 ## Exit codes
 
 | Exit | Category | Meaning |

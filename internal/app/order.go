@@ -37,6 +37,13 @@ const (
 // paymentOnDelivery is the payment method of every order the CLI places.
 const paymentOnDelivery = "on_delivery"
 
+// solicitudeNote tells the owner that a solicitude is a request, not a
+// confirmed order. Repsol validates it by hand, outside the API, and may contact
+// the owner first; the history never shows that state.
+const solicitudeNote = "this is an order request, not a confirmed order: Repsol or the agency " +
+	"may contact you by email or phone to verify the contract holder before delivering, " +
+	"and the order history will not show that it is on hold"
+
 // PlaceOrderInput is the user input of an order placement. Empty Product and
 // zero Quantity are filled with the defaults by the caller; Date empty means the
 // earliest offered date, and Pay empty means delivery.
@@ -91,6 +98,8 @@ type OrderResult struct {
 	Agency AgencyView `json:"agency"`
 	// Payment is always "on_delivery".
 	Payment string `json:"payment"`
+	// Note is a caveat for the owner, set when OrderType is SOLICITUDE.
+	Note string `json:"note,omitempty"`
 }
 
 // PlaceOrder validates the input, plans the order and, unless it is a dry run,
@@ -184,6 +193,9 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		Address:      addressSummary(addr),
 		Agency:       AgencyView{Code: agencyCode},
 		Payment:      paymentOnDelivery,
+	}
+	if branch == orderTypeSolicitude {
+		result.Note = solicitudeNote
 	}
 	if in.DryRun {
 		return result, nil

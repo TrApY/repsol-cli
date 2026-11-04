@@ -86,6 +86,9 @@ func TestPlaceOrderSolicitude(t *testing.T) {
 	if res.OrderType != "SOLICITUDE" {
 		t.Errorf("res.OrderType = %q, want %q", res.OrderType, "SOLICITUDE")
 	}
+	if !strings.Contains(res.Note, "not a confirmed order") {
+		t.Errorf("res.Note = %q, want the solicitude caveat", res.Note)
+	}
 	if res.Product != "butano" {
 		t.Errorf("res.Product = %q, want %q", res.Product, "butano")
 	}
@@ -435,6 +438,9 @@ func TestOrderBranch(t *testing.T) {
 	}
 	if res.OrderType != "ORDER" {
 		t.Errorf("res.OrderType = %q, want %q", res.OrderType, "ORDER")
+	}
+	if res.Note != "" {
+		t.Errorf("res.Note = %q, want empty for an order", res.Note)
 	}
 	if res.ID == "" {
 		t.Error("res.ID is empty, want the id the order route returned")

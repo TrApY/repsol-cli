@@ -40,6 +40,9 @@ func (r OrderResult) PrettyPrint(w io.Writer) error {
 		fmt.Fprintf(&b, "agency phone: %s\n", r.Agency.Phone)
 	}
 	fmt.Fprintf(&b, "payment: %s\n", strings.ReplaceAll(r.Payment, "_", " "))
+	if r.Note != "" {
+		fmt.Fprintf(&b, "note: %s\n", r.Note)
+	}
 	_, err := w.Write(b.Bytes())
 	return err
 }
