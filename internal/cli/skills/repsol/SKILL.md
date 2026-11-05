@@ -47,7 +47,7 @@ default and the MCP `order_create` tool has no payment option.
 repsol order create --pay waylet --dry-run   # checks only, creates nothing
 repsol order create --pay waylet             # prints the payment link
 repsol order create --pay waylet --wait=15m  # stays until the payment is confirmed
-repsol order payment PAYMENT_ID              # was it confirmed? (add --wait=DUR to poll)
+repsol order payment PAYMENT_ID              # was it confirmed? (add --wait=DUR to poll, e.g. after a timeout)
 ```
 
 - No order exists until the owner pays the link. The result has
@@ -58,14 +58,28 @@ repsol order payment PAYMENT_ID              # was it confirmed? (add --wait=DUR
 - With `--wait` the link is printed on stderr while the command waits, and the
   result on stdout only once the payment is confirmed. Pass a duration with
   `=` (`--wait=30m`); `--wait` alone waits 15 minutes.
-- Exit 8 `waylet_unavailable`: the agency does not accept Waylet, or the order is
-  a request (`SOLICITUDE`) that cannot be paid online. Offer `--pay delivery`.
+- Exit 8 `waylet_unavailable`: the agency does not accept Waylet, the order is a
+  request (`SOLICITUDE`) that cannot be paid online, or Repsol offers no online
+  payment for this order (billing, order policy, calendar without a date,
+  expired inspection). Offer `--pay delivery`.
 - Exit 6 `payment_timeout`: the wait ended, but the owner may still pay the link.
-  Do not create another order; run `repsol order payment PAYMENT_ID` later and
-  report what it says. The same goes for exit 130 while waiting.
+  It is **not retryable**: running `order create` again starts a second payment.
+  Run `repsol order payment PAYMENT_ID --wait` to keep waiting for the same one
+  (without `--wait` to check once) and report what it says. The same goes for
+  exit 130 while waiting.
+- Exit 9 `payment_outcome_unknown`: the request for the payment link failed after
+  it was sent. Nothing has been charged, but the payment may exist. Do not retry;
+  run `repsol order payment PAYMENT_ID` as the hint says and report what it says.
 - Never run `order create --pay waylet` again to get the link back: the earlier
   `payment_url` is the one to use. Creating a new payment while one may still be
   paid risks a duplicate delivery.
+- Exit 8 `payment_pending`: an earlier Waylet payment of this profile is not paid
+  yet, so **any** order (Waylet or delivery) is refused until it is. Tell the owner
+  to open the link and pay, then run `repsol order payment PAYMENT_ID --wait` (the
+  hint has the id). Pass `--force` only when the owner says they abandoned that
+  payment and explicitly want another order; it also stops the CLI from holding
+  later orders back for the abandoned one. This holds across runs, so it also
+  catches a second `order create --pay waylet` without `--wait`.
 - The pending-order and order-in-progress rules below apply unchanged.
 
 ## Pending orders
@@ -111,9 +125,9 @@ repsol order create --dry-run
 # Place one bottle of butane on the earliest offered date.
 repsol order create --product butano --qty 1
 
-# Pay with Waylet, wait up to 15 minutes for the payment, then check it later.
+# Pay with Waylet, wait up to 15 minutes for the payment, then keep waiting for the same one.
 repsol order create --pay waylet --wait
-repsol order payment PAYMENT_ID
+repsol order payment PAYMENT_ID --wait
 
 # List the newest orders.
 repsol order list --limit 10

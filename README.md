@@ -47,9 +47,9 @@ picker. `repsol` turns it into one command that an agent can run on its own:
   CLI logs in again by itself if you let it keep your password.
 - Agents can also read the catalog and prices, the stored delivery address, the
   available delivery dates, the order history and the last order.
-- It refuses to place a second delivery while one is pending, places one order
-  per profile at a time, and never retries an order request whose outcome is
-  unknown.
+- It refuses to place a second delivery while one is pending or a Waylet payment
+  is unpaid, places one order per profile at a time, and never retries an order
+  request whose outcome is unknown.
 
 ## Quickstart
 

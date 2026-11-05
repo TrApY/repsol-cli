@@ -51,7 +51,11 @@ func newOrderCreateCommand(state *rootState) *cobra.Command {
 With --pay waylet the order is paid on a Waylet page instead: the command
 prints the payment link and does not place anything until the owner pays it.
 Add --wait to stay until Repsol confirms the payment and print the order. A
-duration needs the = form, as in --wait=30m; --wait alone waits 15 minutes.`,
+duration needs the = form, as in --wait=30m; --wait alone waits 15 minutes.
+
+While a Waylet payment is unpaid, no other order is placed: the command exits 8
+with payment_pending until the payment is confirmed (repsol order payment ID
+--wait) or --force is given.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := state.getApp()
@@ -96,7 +100,7 @@ duration needs the = form, as in --wait=30m; --wait alone waits 15 minutes.`,
 	flags.BoolVar(&opts.dryRun, "dry-run", false,
 		"run every check and print the order without placing it")
 	flags.BoolVar(&opts.force, "force", false,
-		"place the order even when another delivery is pending")
+		"place the order even when another delivery is pending or a Waylet payment is unpaid")
 	return cmd
 }
 
