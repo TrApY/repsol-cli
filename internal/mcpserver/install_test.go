@@ -31,6 +31,20 @@ func readJSONFile(t *testing.T, path string) map[string]any {
 	return doc
 }
 
+// writeFileMode creates a fixture with exactly the given permissions. A plain
+// os.WriteFile applies the umask of the process, so under a restrictive umask
+// (0077 is common) a 0644 fixture comes out 0600, and a test that checks the
+// install keeps "the mode of the file" would compare against the wrong one.
+func writeFileMode(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+}
+
 // requireStatus asserts the status of an install result.
 func requireStatus(t *testing.T, got InstallResult, want string) {
 	t.Helper()
@@ -43,9 +57,7 @@ func TestInstallClaudeCode(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".claude.json")
 	const original = `{"theme":"dark","mcpServers":{"other":{"command":"x"}}}`
-	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	writeFileMode(t, path, original, 0o644)
 
 	command := filepath.Join(home, "bin", "repsol")
 	result, err := Install("claude-code", command, []string{"mcp"}, home, noEnv)
@@ -125,9 +137,7 @@ func TestInstallClaudeCodeKeepsOtherValuesExactly(t *testing.T) {
 	const original = `{"counter":9007199254740993,` +
 		`"projects":{"/b":{"z":1,"a":2},"/a":{"note":"a<b & c>d"}},` +
 		`"mcpServers":{"other":{"command":"x","env":{"Z":"1","A":"2"}}}}`
-	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	writeFileMode(t, path, original, 0o644)
 
 	result, err := Install("claude-code", "/opt/repsol", []string{"mcp"}, home, noEnv)
 	if err != nil {
@@ -163,9 +173,7 @@ func TestInstallFollowsSymlink(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(target, []byte(`{"theme":"dark"}`), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	writeFileMode(t, target, `{"theme":"dark"}`, 0o644)
 	link := filepath.Join(home, ".claude.json")
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks are not available: %v", err)
@@ -212,9 +220,7 @@ args = ["serve"]
 command = "old"
 args = ["mcp"]
 `
-	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+	writeFileMode(t, path, original, 0o600)
 
 	command := filepath.Join(home, "bin", "repsol")
 	result, err := Install("codex", command, []string{"mcp"}, home, noEnv)
