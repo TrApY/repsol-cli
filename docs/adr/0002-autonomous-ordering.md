@@ -27,7 +27,8 @@ preventing the second write.
    `address.localityCode`. The refusal names the pending order's reference and
    date.
 
-3. **`--force` is for explicit owner intent only.** It skips the guard. The MCP
+3. **`--force` is for explicit owner intent only.** It skips the history guard
+   (and only that one: see ADR 0003 for the remembered Waylet payment). The MCP
    `order_create` tool does not expose it, and the embedded agent
    documentation tells agents to report the pending order back to the owner and
    to pass `--force` only when the owner explicitly asks for another delivery

@@ -186,7 +186,8 @@ Dates are sorted ascending. Without a stored address it exits 2
 | `--pay` | `delivery` | `delivery` (pay the driver) or `waylet` (pay on a Waylet page) |
 | `--wait[=DUR]` | off | with `--pay waylet`, wait for the payment to be confirmed; `--wait` alone waits 15 minutes. A duration needs the `=` form, as in `--wait=30m` |
 | `--dry-run` | off | validate only, write nothing |
-| `--force` | off | skip the pending-order guard and the unpaid-payment guard |
+| `--force` | off | skip the pending-order guard (the order history). It does **not** skip the remembered Waylet payment, which is looked up all the same |
+| `--abandon-payment` | off | forget the unpaid Waylet payment the profile remembers (or its unreadable state file) and go on with the order. A payment that was paid is not forgotten this way |
 
 ```json
 {
@@ -222,8 +223,8 @@ on delivery. It sends the same checks as a delivery order, then:
    web would not offer an online payment for it: `billable`, `blockedPolicy`,
    `isCalendarDeliveryWithoutDate` or `inspectionExpired` (a delivery order is
    not subject to these four);
-2. refuses with `payment_pending` while an earlier Waylet payment of the profile
-   is unpaid (see below);
+2. refuses while an earlier Waylet payment of the profile is unpaid, paid with a
+   delivery still due, or could not be checked (see below);
 3. saves the cart (`POST /cart`) and asks for the payment page
    (`POST /waylet-payment/url`);
 4. prints the link. **No order exists yet**: Repsol creates it when the owner
@@ -262,34 +263,62 @@ keys, with `payment_status` `confirmed`, `id` set to the order's external id,
 and `delivery_date` and the agency name and phone as Repsol reports them.
 
 The profile order lock is held for the whole wait, so another `order create` for
-the profile exits 8 with `order_in_progress`. A confirmed Waylet order shows in
-the history and blocks the next order like any other.
+the profile exits 8 with `order_in_progress`. A confirmed Waylet order blocks
+the next order twice over: through the history like any other, and through the
+remembered payment, which refuses on its own until the delivery date has passed.
 
-**An unpaid payment blocks every later order.** Without `--wait` the command
+**A remembered payment blocks every later order.** Without `--wait` the command
 returns as soon as it prints the link and releases the lock, and until the owner
 pays, Repsol has no order that the history could show. So the CLI remembers the
 payment id and start time of the profile's unresolved payment in a private file
 next to `credentials.toml` (`payment-PROFILE.toml`, mode 0600; logging out does
-not remove it). While it is unresolved, `order create` with either payment
-method exits 8 with `payment_pending` and creates nothing, `--dry-run` included.
-Before it refuses, the command asks Repsol whether the payment was paid since:
-if it was, the payment is closed and the paid order, now in the history, is
-handled by the usual pending-order guard. `order payment` and a confirmed
-`--wait` close the payment too. A wait that times out or is interrupted leaves
-it open. `--force` skips the guard when the owner wants another order anyway; it
-replaces the remembered payment with the new one (a Waylet order) or drops it
-(a delivery order), so an abandoned link can never block ordering for good.
+not remove it). Before every `order create`, `--dry-run` included, it asks
+Repsol about that payment, **whatever `--force` says** (`--force` is about the
+order history only), and the answer decides:
+
+| Repsol says | the order | the payment |
+|---|---|---|
+| paid, delivery today or later | exit 8 `pending_order`, naming the order and its date; `--force` and `--abandon-payment` do not skip it | stays remembered, and refuses on its own word: the history may not list the order yet, or not under the same agency and locality |
+| paid, delivery behind us | goes on to the history guard | forgotten (a dry run writes nothing) |
+| not paid | exit 8 `payment_pending` | stays, unless `--abandon-payment` (forgotten, with a notice) or it is over 24 hours old (forgotten, with a notice) |
+| the lookup failed | exit 8 `payment_check_failed` ("could not check whether the payment … was paid"), retryable when the failure was the network or the server | stays, unless `--abandon-payment` |
+| 401 | exit 3, as everywhere | stays |
+
+`order payment` and a confirmed `--wait` apply the same rule when they see the
+payment paid: it is forgotten only once its delivery is behind us. A wait that
+times out or is interrupted leaves it open. An unpaid payment older than
+24 hours is looked up one last time; if the lookup says it is not paid, the
+next order forgets it and reports the fact in `notices`; if the lookup fails, it
+stays.
+
+The ways to let go of a payment are explicit and separate from `--force`:
+`order create --abandon-payment` (an unpaid or unchecked payment; a paid one is
+refused with `pending_order`) and `repsol order payment [PAYMENT_ID] --abandon`
+(see below). A state file that cannot be read refuses the order with
+`payment_state_invalid`, whose hint says to run `repsol order payment --abandon`
+(or to pass `--abandon-payment`), which removes it.
+
+`notices` is an array of strings in the order result (present only when the
+command forgot a payment or a state file on its own, or, with `--dry-run`,
+would): `"the Waylet payment started at … was abandoned; it was forgotten"`.
 
 The two writes of the flow are sent once and never retried. Neither is an
 order. A failure of the cart request is a plain error with the hint `no payment
 was started and nothing was charged`: no payment id came back, so there is
 nothing to pay. A failure of the payment page request that proves it was
-refused (a 4xx) is the same. One that leaves it unknown whether the request was
+refused (a 4xx) is the same, and so is one that never left the machine (the
+connection was refused or a name did not resolve: the transport proves that not
+a byte of the request was written): the payment is forgotten, the network
+failure is reported with the hint that no link was handed out, and trying again
+is safe. One that leaves it unknown whether the request was
 processed (a transport failure or timeout after sending, a 5xx, or a 200 whose
 answer cannot be used) exits 9 with `payment_outcome_unknown`, not retryable:
 nothing has been charged, but the payment may have been created. It stays
 remembered, and the hint says to run `repsol order payment PAYMENT_ID` and not
-to start another order. When `--wait` ends without a confirmation the command
+to start another order. Ctrl-C while the link is requested exits 130 with the
+same advice: it says that no link was handed out (so nothing is waiting to be
+paid) and that the payment may exist; it does not say that the link may still be
+paid. When `--wait` ends without a confirmation the command
 exits 6 with `payment_timeout`, **not retryable** (running `order create` again
 would start a second payment; the link may still be paid), with the hint
 `repsol order payment PAYMENT_ID --wait`. Ctrl-C while waiting exits 130 with the
@@ -304,22 +333,29 @@ Errors: `invalid_quantity` (exit 2, above the per-material maximum), `unknown_pr
 (exit 2, a negative wait), `waylet_unavailable` (exit 8, see above),
 `payment_timeout` (exit 6, the wait ended unconfirmed; not retryable),
 `payment_pending` (exit 8, an earlier Waylet payment is unpaid; see above),
+`payment_check_failed` (exit 8, the earlier payment could not be looked up, so
+nothing is known about it; retryable when the failure was the network or the
+server), `payment_state_invalid` (exit 8, the file that remembers the payment
+cannot be read; `repsol order payment --abandon` removes it),
 `payment_outcome_unknown` (exit 9, the payment page request failed after it was
 sent; the payment may exist, nothing was charged),
 `date_unavailable` (exit 8, the date is not offered), `product_unavailable`
 (exit 8), `no_delivery_dates` (exit 8), `online_policy_required` (exit 8, order
-on the web), `pending_order` (exit 8, a delivery is already pending),
+on the web), `pending_order` (exit 8, a delivery is already pending: in the history, or a
+Waylet payment that was paid and is still due, which `--force` does not skip),
 `order_in_progress` (exit 8, another order for the profile is being placed; do
 not retry, run `repsol order last` once it finishes; `--force` does not
 override it; `--dry-run` does not take the lock),
 `order_outcome_unknown` (exit 9, run `repsol order last` before retrying).
 
-### `repsol order payment PAYMENT_ID [--wait[=DUR]]`
+### `repsol order payment [PAYMENT_ID] [--wait[=DUR]] [--abandon]`
 
 Looks up the order a Waylet payment produced (`GET /order-history/payment-id`).
 It takes no lock and may be repeated. Without `--wait` it asks once. It only
 reads Repsol; its one local effect is to forget the profile's remembered
-payment when that payment is confirmed.
+payment when that payment is confirmed and its delivery is behind us (until
+then the payment stays remembered, so it keeps refusing other orders). The
+`--abandon` form below is the exception: it writes the state and takes the lock.
 
 ```json
 {"payment_id": "fake-payment-1", "payment_status": "awaiting_payment"}
@@ -335,9 +371,12 @@ payment when that payment is confirmed.
 }
 ```
 
-A payment counts as confirmed only when the answer carries an order external id
-and the agency and address objects the web needs (a bare `{}` or an answer
-missing one of them is not a confirmation). Like the web, which asks again on
+A payment counts as confirmed only when the answer carries the agency and
+address objects the web needs (a bare `{}` or an answer missing one of them is
+not a confirmation). Like the web, which reads the external id as
+`externalId || ""`, it does not need an order id: a confirmed payment without
+one prints no `id` (the pretty output says "payment confirmed" instead of an
+empty `order` line). Like the web, which asks again on
 any failure of this lookup, the CLI reads as `awaiting_payment` (and, with
 `--wait`, polls again on) a 404 or any other 4xx but 401/403, the error envelope
 `{"error": true, …}` sent with HTTP 200, a null or empty body and an incomplete
@@ -346,6 +385,25 @@ was never made or that Repsol does not know: the API answers the same for both.
 With `--wait` it polls like `order create --wait` and exits 6 with
 `payment_timeout` when the wait ends. An empty id exits 2
 (`invalid_payment_id`).
+
+With `--abandon` it forgets the payment the profile remembers; `PAYMENT_ID` is
+optional then, and must be the remembered one when given (`payment_mismatch`,
+exit 8, otherwise; `no_pending_payment`, exit 4, when nothing is remembered).
+Use it only when the owner will not pay that link. It takes the order lock
+(`order_in_progress` beside a running order), cannot be combined with `--wait`
+(`abandon_with_wait`, exit 2), and looks the payment up first, only to report:
+
+```json
+{"payment_id": "fake-payment-1", "payment_status": "abandoned"}
+```
+
+A payment that turns out to be paid is forgotten all the same, because the owner
+may have cancelled that delivery and has no other way to order again before its
+date; the output then carries the order (`id`, `delivery_date`, `agency`) and a
+`note` saying that the payment was paid and the history may still list the
+delivery. A lookup that fails does not stop it (the `note` says the payment could
+not be checked, so it may have been paid); a 401 does. A state file that cannot
+be read is removed without a lookup, with a `note` that says so.
 
 ### `repsol order list [--limit N]`
 
@@ -435,8 +493,11 @@ An unknown name exits 4 (`skill_not_found`).
   `{"target": "…", "path": "…", "status": "installed|updated|unchanged"}`.
 
 `order_create` takes `product`, `quantity`, `date` and `dry_run`. It has no
-`force`: an agent must ask the owner before placing a second delivery while one
-is pending or a Waylet payment started from the CLI is unpaid (`payment_pending`).
+`force` and no way to abandon a payment: an agent must ask the owner before
+placing a second delivery while one is pending or a Waylet payment started from
+the CLI is unpaid, paid and still due, or could not be checked
+(`payment_pending`, `pending_order`, `payment_check_failed`). The result may
+carry `notices`, to pass on to the owner.
 It has no payment method either: orders placed through MCP are paid on
 delivery. Waylet payments are a CLI feature.
 

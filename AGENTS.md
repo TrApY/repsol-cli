@@ -31,8 +31,11 @@ owner's own account.
   `POST /waylet-payment/url` returns the page; once the owner pays, Repsol
   creates the order, and `GET /order-history/payment-id` returns it. The CLI
   never confirms an order: it only reads that lookup. The payment id is kept in
-  a private per-profile file while the payment is unpaid, and any other order is
-  refused with `payment_pending` meanwhile.
+  a private per-profile file while the payment is unpaid, or paid with its
+  delivery still due, and any other order is refused meanwhile
+  (`payment_pending`, `payment_check_failed` when it could not be looked up,
+  `pending_order` when it was paid). `--force` skips only the order history;
+  giving a payment up is `--abandon` / `--abandon-payment`.
 - **Pending** — the history has no status field, so a delivery is considered
   pending when its `deliveryDate` is today or later in `Europe/Madrid`.
 

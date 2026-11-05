@@ -48,6 +48,7 @@ repsol order create --pay waylet --dry-run   # checks only, creates nothing
 repsol order create --pay waylet             # prints the payment link
 repsol order create --pay waylet --wait=15m  # stays until the payment is confirmed
 repsol order payment PAYMENT_ID              # was it confirmed? (add --wait=DUR to poll, e.g. after a timeout)
+repsol order payment --abandon               # the owner will not pay that link: forget it
 ```
 
 - No order exists until the owner pays the link. The result has
@@ -70,21 +71,46 @@ repsol order payment PAYMENT_ID              # was it confirmed? (add --wait=DUR
 - Exit 9 `payment_outcome_unknown`: the request for the payment link failed after
   it was sent. Nothing has been charged, but the payment may exist. Do not retry;
   run `repsol order payment PAYMENT_ID` as the hint says and report what it says.
+  Exit 130 while the link was being requested is the same case: no link was
+  handed out, so there is nothing for the owner to pay, but the payment may exist.
+  A link request that failed before it left the machine (the connection was
+  refused, a name did not resolve) is a plain network error that says so; the
+  payment is not remembered, and trying again is safe.
+- When `payment_status` is `confirmed` the `id` may be missing: Repsol does not
+  always send the order id. The payment is still confirmed; say so without an id.
 - Never run `order create --pay waylet` again to get the link back: the earlier
   `payment_url` is the one to use. Creating a new payment while one may still be
   paid risks a duplicate delivery.
 - Exit 8 `payment_pending`: an earlier Waylet payment of this profile is not paid
   yet, so **any** order (Waylet or delivery) is refused until it is. Tell the owner
   to open the link and pay, then run `repsol order payment PAYMENT_ID --wait` (the
-  hint has the id). Pass `--force` only when the owner says they abandoned that
-  payment and explicitly want another order; it also stops the CLI from holding
-  later orders back for the abandoned one. This holds across runs, so it also
-  catches a second `order create --pay waylet` without `--wait`.
+  hint has the id). This holds across runs, so it also catches a second
+  `order create --pay waylet` without `--wait`.
+- Exit 8 `payment_check_failed`: Repsol could not be asked whether the earlier
+  payment was paid (network, server, firewall). It does **not** mean the payment
+  is unpaid. Nothing was ordered. Try again later, or run
+  `repsol order payment PAYMENT_ID`, and report what it says.
+- Exit 8 `pending_order` that names an order "paid with Waylet": the payment was
+  paid and its delivery is still due. Tell the owner which order and date. `--force`
+  does **not** skip it.
+- To give a payment up, pass `--abandon-payment` to `order create`, or run
+  `repsol order payment --abandon`, **only** when the owner says they will not pay
+  that link. `--force` is a different decision (see Pending orders) and never
+  forgets a payment. `--abandon-payment` refuses a payment that was paid; only
+  `order payment --abandon` forgets one, and its note says that the order exists.
+  Pass `--abandon` only on the owner's word, and tell them what its output says.
+- A payment nobody paid within 24 hours is looked up one last time and, if it is
+  still unpaid, forgotten by the next order; the result says so in `notices`. Pass
+  `notices` on to the owner.
+- Exit 8 `payment_state_invalid`: the file that remembers the payment cannot be
+  read, so the CLI cannot tell whether a link is waiting. Ask the owner whether a
+  link may have been paid (check `repsol order list`), then clear it with
+  `repsol order payment --abandon`.
 - The pending-order and order-in-progress rules below apply unchanged.
 
 ## Pending orders
 
-If it exits 8 with code `pending_order`, tell the owner which order is pending. Pass `--force` only when the owner explicitly asks for another delivery while one is pending. A delivery cancelled by phone still shows as pending until its date passes.
+If it exits 8 with code `pending_order`, tell the owner which order is pending. Pass `--force` only when the owner explicitly asks for another delivery while one is pending. A delivery cancelled by phone still shows as pending until its date passes. `--force` only skips this check of the order history: a Waylet payment the profile remembers is looked up regardless, and `--force` never forgets it (see Paying with Waylet).
 
 ## Order in progress
 
