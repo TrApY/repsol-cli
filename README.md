@@ -41,6 +41,8 @@ picker. `repsol` turns it into one command that an agent can run on its own:
 
 - `repsol order create` places a real order for a bottle, paid on delivery, with
   no confirmation prompt, and prints the order id and delivery date.
+- `repsol order create --pay waylet` pays with Waylet instead: it prints the
+  payment link, and `--wait` stays until Repsol confirms the payment.
 - You import your session once. After that, agents act on their own, and the
   CLI logs in again by itself if you let it keep your password.
 - Agents can also read the catalog and prices, the stored delivery address, the
