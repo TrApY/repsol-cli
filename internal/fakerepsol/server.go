@@ -100,6 +100,12 @@ type Server struct {
 	agency   string
 	writes   int
 	held     map[string]*hold
+
+	waylet         bool
+	wayletPayAfter int
+	payments       map[string]*payment
+	paymentOrder   []string
+	confirmedCount int
 }
 
 // hold parks the next request to a path until the test releases it.
@@ -117,6 +123,8 @@ func New() *Server {
 		held:     make(map[string]*hold),
 		check:    repsolapi.CartCheck{Status: "EE04", OrderType: "SOLICITUDE"},
 		agency:   AgencyCode,
+		waylet:   true,
+		payments: make(map[string]*payment),
 	}
 	s.routes = map[string]route{
 		"/gigya/accounts.getAccountInfo":  {http.MethodPost, s.handleAccountInfo},
@@ -136,6 +144,10 @@ func New() *Server {
 		"/api/cart/check": {http.MethodPost, s.handleCartCheck},
 		"/api/solicitude": {http.MethodPost, s.handleSolicitude},
 		"/api/order":      {http.MethodPost, s.handleOrder},
+
+		"/api/cart":                     {http.MethodPost, s.handleCart},
+		"/api/waylet-payment/url":       {http.MethodPost, s.handleWayletURL},
+		"/api/order-history/payment-id": {http.MethodGet, s.handleOrderByPayment},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.serve)
