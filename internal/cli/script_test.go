@@ -72,7 +72,7 @@ func cmdFake(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Fatalf("fake does not support !")
 	}
 	if len(args) == 0 {
-		ts.Fatalf("usage: fake count PATH N | fake fail PATH STATUS | fake check online-policy|order | fake reject-token TOKEN")
+		ts.Fatalf("usage: fake count PATH N | fake fail PATH STATUS | fake check online-policy|order|solicitude | fake waylet on|off|pay-after N|pay ID | fake reject-token TOKEN")
 	}
 
 	srv := fakeServer(ts)
@@ -95,16 +95,20 @@ func cmdFake(ts *testscript.TestScript, neg bool, args []string) {
 		srv.FailNext(args[1], status)
 	case "check":
 		if len(args) != 2 {
-			ts.Fatalf("usage: fake check online-policy|order")
+			ts.Fatalf("usage: fake check online-policy|order|solicitude")
 		}
 		switch args[1] {
 		case "online-policy":
 			srv.SetCheck(repsolapi.CartCheck{Status: "EE04", OnlinePolicy: true, OrderType: "SOLICITUDE"})
 		case "order":
 			srv.SetCheck(repsolapi.CartCheck{Status: "EE04", Order: true, OrderType: "ORDER"})
+		case "solicitude":
+			srv.SetCheck(repsolapi.CartCheck{Status: "EE04", OrderType: "SOLICITUDE"})
 		default:
 			ts.Fatalf("fake check: unknown outcome %q", args[1])
 		}
+	case "waylet":
+		cmdFakeWaylet(ts, srv, args[1:])
 	case "reject-token":
 		if len(args) != 2 {
 			ts.Fatalf("usage: fake reject-token TOKEN")
@@ -112,6 +116,35 @@ func cmdFake(ts *testscript.TestScript, neg bool, args []string) {
 		srv.RejectToken(args[1])
 	default:
 		ts.Fatalf("fake: unknown command %q", args[0])
+	}
+}
+
+// cmdFakeWaylet drives the Waylet side of the fake: whether the agency accepts
+// it, and when the owner "pays".
+func cmdFakeWaylet(ts *testscript.TestScript, srv *fakerepsol.Server, args []string) {
+	const usage = "usage: fake waylet on|off|pay-after N|pay ID"
+	if len(args) == 0 {
+		ts.Fatalf(usage)
+	}
+	switch args[0] {
+	case "on", "off":
+		srv.SetWayletPayment(args[0] == "on")
+	case "pay-after":
+		if len(args) != 2 {
+			ts.Fatalf(usage)
+		}
+		n, err := strconv.Atoi(args[1])
+		ts.Check(err)
+		srv.SetWayletPayAfter(n)
+	case "pay":
+		if len(args) != 2 {
+			ts.Fatalf(usage)
+		}
+		if !srv.ConfirmWaylet(args[1]) {
+			ts.Fatalf("fake waylet pay: no unpaid payment %q", args[1])
+		}
+	default:
+		ts.Fatalf(usage)
 	}
 }
 

@@ -1,0 +1,27 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+fake waylet pay-after 1
+
+# --wait prints the link on stderr at once, then the confirmed order on stdout.
+exec repsol order create --pay waylet --wait
+stderr 'open this page to pay with Waylet'
+stderr 'https://waylet.example.test/pay\?paymentId=fake-payment-1'
+stdout '"payment_status": "confirmed"'
+stdout '"id": "800000000000000003"'
+stdout '"payment_url": "https://waylet.example.test/pay'
+stdout '"payment": "waylet"'
+fake count /api/cart 1
+fake count /api/order 0
+fake count /api/solicitude 0
+
+# Pretty output names the order and the status.
+exec repsol --format pretty order payment fake-payment-1
+stdout 'payment status: confirmed'
+stdout 'order: 800000000000000003'
+
+# The paid order is now pending and blocks the next one.
+! exec repsol --error-format json order create --pay waylet --wait
+stderr '"code":"pending_order"'
+fake count /api/cart 1
