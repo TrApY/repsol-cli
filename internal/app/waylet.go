@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/felipe9962/repsol-cli/internal/apperr"
+	"github.com/felipe9962/repsol-cli/internal/config"
 	"github.com/felipe9962/repsol-cli/internal/repsolapi"
 )
 
@@ -53,10 +54,13 @@ type PaymentView struct {
 // payment goes through, and the CLI only reads it.
 //
 // The two writes are sent once each. The cart is not an order and the page
-// charges nothing until the owner opens it, so a failure of either is reported
-// as it is, and no outcome-unknown error is needed. The caller holds the order
-// lock, so the lock covers the wait: no other order for the profile starts
-// while this one is waiting for its payment.
+// charges nothing until the owner opens it, so no order-outcome error is
+// needed, but the payment id the cart returns is remembered as soon as it
+// exists: the link is payable until the owner pays it, Repsol has no order for
+// it until then, and the history cannot tell a later run that it is still
+// open. The caller holds the order lock, so the lock covers the wait; without a
+// wait it is released when the link is printed, and the remembered payment is
+// what keeps the next order from paying the same delivery twice.
 func (a *App) startWayletPayment(
 	ctx context.Context,
 	in PlaceOrderInput,
@@ -77,11 +81,20 @@ func (a *App) startWayletPayment(
 		DeliveryDate:   date.Date,
 	})
 	if err != nil {
+		// No payment id came back, so there is no link to pay and nothing to
+		// track, whatever happened to the request.
 		return OrderResult{}, noPaymentStarted(err)
 	}
+	if err := a.store.SavePendingPayment(a.profile, config.PendingPayment{
+		PaymentID: temp.PaymentID,
+		StartedAt: a.now(),
+	}); err != nil {
+		return OrderResult{}, err
+	}
+
 	link, err := a.api.WayletURL(ctx, temp.PaymentID)
 	if err != nil {
-		return OrderResult{}, noPaymentStarted(err)
+		return OrderResult{}, a.wayletURLFailed(ctx, temp.PaymentID, err)
 	}
 
 	result.PaymentID = temp.PaymentID
@@ -98,18 +111,108 @@ func (a *App) startWayletPayment(
 	if err != nil {
 		return OrderResult{}, err
 	}
+	a.closePayment(temp.PaymentID)
 	result.PaymentStatus = paymentConfirmed
 	result.ID = string(order.ExternalID)
 	if order.DeliveryDate != "" {
 		result.DeliveryDate = order.DeliveryDate
 	}
-	if order.Agency.Name != "" {
-		result.Agency.Name = order.Agency.Name
-	}
-	if order.Agency.Phone != "" {
-		result.Agency.Phone = order.Agency.Phone
+	if order.Agency != nil {
+		if order.Agency.Name != "" {
+			result.Agency.Name = order.Agency.Name
+		}
+		if order.Agency.Phone != "" {
+			result.Agency.Phone = order.Agency.Phone
+		}
 	}
 	return result, nil
+}
+
+// wayletURLFailed turns the failure of the payment page request into the error
+// the owner sees, and settles what the profile remembers.
+//
+// A definite refusal proves that no link was handed out: the payment is
+// forgotten and the failure says nothing was started. Anything else leaves it
+// open. A transport failure, a 5xx or an answer that cannot be used came after
+// the request may have been processed, so the payment may exist, and the CLI
+// cannot tell. Nothing has been charged either way, because only the owner
+// paying the link charges, but the payment stays remembered and the failure is
+// not retryable.
+func (a *App) wayletURLFailed(ctx context.Context, paymentID string, err error) error {
+	switch {
+	case ctx.Err() != nil:
+		return interruptedWaiting(paymentID)
+	case urlOutcomeUnknown(err):
+		return paymentOutcomeUnknown(paymentID, err)
+	}
+	_ = a.store.ClearPendingPayment(a.profile, paymentID)
+	return noPaymentStarted(err)
+}
+
+// urlOutcomeUnknown reports whether the failure of the payment page request
+// leaves it unknown whether the payment was created: it was sent and then the
+// transport failed, the server failed, or the answer was a success that cannot
+// be used. A 4xx is an answer, and refuses the request.
+func urlOutcomeUnknown(err error) bool {
+	typed := apperr.From(err)
+	switch typed.Category {
+	case apperr.Network:
+		return true
+	case apperr.APIChanged:
+		return typed.HTTPStatus == 0 || typed.HTTPStatus/100 == 2 || typed.HTTPStatus/100 == 5
+	default:
+		return false
+	}
+}
+
+// closePayment forgets a payment: the one named, or whichever is open when the
+// id is empty. A failure to write the state is ignored: the next order looks
+// the payment up again, finds it paid, and closes it then.
+func (a *App) closePayment(paymentID string) {
+	_ = a.store.ClearPendingPayment(a.profile, paymentID)
+}
+
+// ensurePaymentResolved refuses an order while the profile has a Waylet payment
+// it has not seen paid. It asks Repsol first: a payment that was paid since is
+// closed (unless this is a dry run, which writes nothing), and the order the
+// payment created is in the history, where the pending-order guard sees it.
+// What it cannot confirm paid it treats as open, and it never guesses the
+// session: an authentication failure is reported as it is.
+func (a *App) ensurePaymentResolved(ctx context.Context, dryRun bool) error {
+	pending, found, err := a.store.LoadPendingPayment(a.profile)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	_, paid, err := a.api.OrderByPaymentID(ctx, pending.PaymentID)
+	switch {
+	case ctx.Err() != nil:
+		return err
+	case err != nil && apperr.From(err).Category == apperr.Auth:
+		return err
+	case err == nil && paid:
+		if !dryRun {
+			a.closePayment(pending.PaymentID)
+		}
+		return nil
+	}
+	return paymentPending(pending, err)
+}
+
+// paymentPending is the refusal of an order while a payment is open. lookupErr,
+// when set, is why the payment could not be confirmed paid.
+func paymentPending(p config.PendingPayment, lookupErr error) error {
+	e := apperr.New(apperr.Refused, "payment_pending",
+		fmt.Sprintf("a Waylet payment started at %s is not paid yet",
+			p.StartedAt.In(madrid).Format("2006-01-02 15:04"))).
+		WithHint(fmt.Sprintf("open its link and pay, then run \"repsol order payment %s --wait\"; "+
+			"pass --force only if the owner abandoned that payment and wants a new order", p.PaymentID))
+	if lookupErr != nil {
+		e.Err = lookupErr
+	}
+	return e
 }
 
 // PaymentStatus looks up the order a Waylet payment produced. With a zero wait
@@ -144,39 +247,50 @@ func (a *App) PaymentStatus(ctx context.Context, paymentID string, wait time.Dur
 	if !found {
 		return PaymentView{PaymentID: paymentID, Status: paymentAwaiting}, nil
 	}
+	a.closePayment(paymentID)
 	view := PaymentView{
 		PaymentID:    paymentID,
 		Status:       paymentConfirmed,
 		ID:           string(order.ExternalID),
 		DeliveryDate: order.DeliveryDate,
 	}
-	if order.Agency.Name != "" || order.Agency.Phone != "" {
+	if order.Agency != nil && (order.Agency.Name != "" || order.Agency.Phone != "") {
 		view.Agency = &AgencyView{Name: order.Agency.Name, Phone: order.Agency.Phone}
 	}
 	return view, nil
 }
 
 // waitForPayment polls the order of a payment until it exists or the wait is
-// over. The deadline is counted on the app's clock. A lookup that fails on the
-// network is tolerated and asked again; any other failure ends the wait, with a
-// hint that the payment may still have gone through. A canceled context ends it
-// as an interruption.
+// over. The deadline is counted on the app's clock, and it is a total: every
+// lookup is one request that may not outlive what is left of the wait, so a
+// slow Repsol cannot stretch it. A lookup that fails on the network or on the
+// server is tolerated and asked again, and so is every answer the web reads as
+// "not yet" (see repsolapi.OrderByPaymentID); any other failure ends the wait,
+// with a hint that the payment may still have gone through. A canceled context
+// ends it as an interruption.
 func (a *App) waitForPayment(ctx context.Context, paymentID string, wait time.Duration) (repsolapi.PaymentOrder, error) {
 	deadline := a.now().Add(wait)
 	var lastErr error
 	for {
-		order, found, err := a.api.OrderByPaymentID(ctx, paymentID)
+		remaining := deadline.Sub(a.now())
+		if remaining <= 0 {
+			return repsolapi.PaymentOrder{}, paymentTimeout(paymentID, wait, lastErr)
+		}
+		order, found, err := a.pollPayment(ctx, paymentID, remaining)
 		switch {
 		case ctx.Err() != nil:
 			return repsolapi.PaymentOrder{}, interruptedWaiting(paymentID)
 		case err == nil && found:
 			return order, nil
+		case errors.Is(err, context.DeadlineExceeded):
+			// The lookup ran into the deadline of the wait itself.
+			return repsolapi.PaymentOrder{}, paymentTimeout(paymentID, wait, lastErr)
 		case err != nil && apperr.From(err).Category != apperr.Network:
 			return repsolapi.PaymentOrder{}, withPaymentHint(err, paymentID)
 		}
 		lastErr = err
 
-		remaining := deadline.Sub(a.now())
+		remaining = deadline.Sub(a.now())
 		if remaining <= 0 {
 			return repsolapi.PaymentOrder{}, paymentTimeout(paymentID, wait, lastErr)
 		}
@@ -189,20 +303,28 @@ func (a *App) waitForPayment(ctx context.Context, paymentID string, wait time.Du
 	}
 }
 
+// pollPayment sends one lookup of the payment that may take at most limit.
+func (a *App) pollPayment(ctx context.Context, paymentID string, limit time.Duration) (repsolapi.PaymentOrder, bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	return a.api.PollOrderByPaymentID(ctx, paymentID)
+}
+
 // checkPaymentHint tells the owner how to learn whether a payment went through,
 // and not to start another order meanwhile.
 func checkPaymentHint(paymentID string) string {
 	return fmt.Sprintf("the link may still be paid; do not start another order, "+
-		"run \"repsol order payment %s\" to check", paymentID)
+		"run \"repsol order payment %s --wait\" to keep waiting, or without --wait to check once", paymentID)
 }
 
 // paymentTimeout is the error of a wait that ended without a confirmation. It
-// is retryable: asking again later may find the payment confirmed.
+// is not retryable: repeating the command that waited would start a second
+// payment, while the first may still be paid. The way on is to keep waiting for
+// the same payment, which is what the hint names.
 func paymentTimeout(paymentID string, wait time.Duration, lastLookup error) error {
 	e := apperr.New(apperr.Network, "payment_timeout",
 		fmt.Sprintf("the Waylet payment was not confirmed within %s", wait)).
 		WithHint(checkPaymentHint(paymentID))
-	e.Retryable = true
 	if lastLookup != nil {
 		e.Err = lastLookup
 	}
@@ -226,14 +348,27 @@ func withPaymentHint(err error, paymentID string) error {
 	return &typed
 }
 
-// noPaymentStarted adds to a failure of the payment start that nothing was
-// charged, unless the error has a hint of its own.
+// noPaymentStarted adds to a failure that came before any payment link existed
+// that nothing was charged, unless the error has a hint of its own.
 func noPaymentStarted(err error) error {
 	typed := *apperr.From(err)
 	if typed.Hint == "" {
 		typed.Hint = "no payment was started and nothing was charged"
 	}
 	return &typed
+}
+
+// paymentOutcomeUnknown is the error of a payment page request that failed
+// after it was sent. The payment may have been created, so the error is not
+// retryable and says where to look. Nothing has been charged: only the owner
+// paying the link charges.
+func paymentOutcomeUnknown(paymentID string, cause error) error {
+	return apperr.New(apperr.OutcomeUnknown, "payment_outcome_unknown",
+		"the Waylet payment link request failed after it was sent; "+
+			"nothing has been charged, but the payment may have been created").
+		WithHint(fmt.Sprintf("do not start another order: run \"repsol order payment %s\" to check it, "+
+			"and pass --force only if the owner wants a new payment anyway", paymentID)).
+		WithCause(cause)
 }
 
 // wayletUnavailable is the refusal of a Waylet payment the order cannot use.

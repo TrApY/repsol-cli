@@ -171,8 +171,10 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		return OrderResult{}, err
 	}
 
-	// The lock covers the pending guard, the cart check and the write, so two
-	// orders started at the same time cannot both pass the guard.
+	// The lock covers the pending guards, the cart check and the write, so two
+	// orders started at the same time cannot both pass the guards. A Waylet
+	// order started without --wait releases it when it prints the link, and the
+	// payment guard is what remembers it from then on.
 	if !in.DryRun {
 		release, err := a.lockOrder()
 		if err != nil {
@@ -182,6 +184,9 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 	}
 
 	if !in.Force {
+		if err := a.ensurePaymentResolved(ctx, in.DryRun); err != nil {
+			return OrderResult{}, err
+		}
 		if err := a.ensureNoPendingOrder(ctx, agencyCode, addr.LocalityCode); err != nil {
 			return OrderResult{}, err
 		}
@@ -209,9 +214,10 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 	if err != nil {
 		return OrderResult{}, err
 	}
-	if in.Pay == payWaylet && branch != orderTypeOrder {
-		return OrderResult{}, wayletUnavailable(
-			"this order is a request that Repsol validates by hand, and a request cannot be paid online")
+	if in.Pay == payWaylet {
+		if err := wayletAllowed(branch, check); err != nil {
+			return OrderResult{}, err
+		}
 	}
 
 	result := OrderResult{
@@ -243,6 +249,12 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 	placed, err := a.writeOrder(ctx, branch, check, addr, info.MaterialID, in.Quantity, unitPrice, date)
 	if err != nil {
 		return OrderResult{}, err
+	}
+	if in.Force {
+		// The owner chose this order over the payment that was still open, so
+		// the CLI stops holding every later order back for it. Without this an
+		// abandoned payment link would block ordering for good.
+		a.closePayment("")
 	}
 
 	result.ID = placed.ExternalID
@@ -433,6 +445,28 @@ func orderBranch(check repsolapi.CartCheck) (string, error) {
 			fmt.Sprintf("the cart check returned an unsupported order type %q", check.OrderType)).
 			WithHint(webFlowHint)
 	}
+}
+
+// wayletAllowed refuses a Waylet payment the web would not offer for this cart.
+// The web shows its online payment methods only for an order (not a request)
+// that is not billable, is not blocked by the order policy and is not a
+// calendar delivery without a date, and an expired inspection leaves it only
+// the payment on delivery. A delivery order is not subject to these refusals.
+func wayletAllowed(branch string, check repsolapi.CartCheck) error {
+	switch {
+	case branch != orderTypeOrder:
+		return wayletUnavailable(
+			"this order is a request that Repsol validates by hand, and a request cannot be paid online")
+	case check.InspectionExpired:
+		return wayletUnavailable("the installation inspection has expired, so the order can only be paid on delivery")
+	case check.Billable:
+		return wayletUnavailable("this order has to be billed, and Repsol offers no online payment for it")
+	case check.BlockedPolicy:
+		return wayletUnavailable("the order policy of this address blocks online payments")
+	case check.IsCalendarDeliveryWithoutDate:
+		return wayletUnavailable("the delivery calendar of this product has no date for it, so it cannot be paid online")
+	}
+	return nil
 }
 
 // writeOrder performs the single write the cart check selected. It is never
