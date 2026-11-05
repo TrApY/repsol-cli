@@ -207,15 +207,18 @@ func TestOrderByPaymentID(t *testing.T) {
 		{name: "null_body", status: http.StatusOK, body: `null`},
 		{name: "empty_body", status: http.StatusOK, body: ``},
 		{name: "empty_object", status: http.StatusOK, body: `{}`},
-		// The web reads the externalId, the agency and the address of the
-		// answer, and fails without them; a body that lacks one is not a
-		// confirmation.
+		// The web reads the agency and the address of the answer and fails
+		// without them, but it accepts an empty external id (externalId || ""),
+		// so an answer with the two objects is a confirmation whatever its id.
 		{name: "no_external_id", status: http.StatusOK,
-			body: `{"deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`},
+			body:      `{"deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`,
+			wantFound: true, wantDate: "2026-11-05"},
 		{name: "empty_external_id", status: http.StatusOK,
-			body: `{"externalId":"","deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`},
+			body:      `{"externalId":"","deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`,
+			wantFound: true, wantDate: "2026-11-05"},
 		{name: "null_external_id", status: http.StatusOK,
-			body: `{"externalId":null,"deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`},
+			body:      `{"externalId":null,"deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`,
+			wantFound: true, wantDate: "2026-11-05"},
 		{name: "no_agency", status: http.StatusOK,
 			body: `{"externalId":8,"deliveryDate":"2026-11-05","address":{"street":"x"}}`},
 		{name: "no_address", status: http.StatusOK,

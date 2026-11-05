@@ -17,6 +17,9 @@ func (r OrderResult) PrettyPrint(w io.Writer) error {
 		b.WriteString("dry run: no order was placed\n")
 	case r.PaymentStatus == paymentAwaiting:
 		b.WriteString("payment started: the order is placed when the payment is confirmed\n")
+	case r.ID == "":
+		// The web accepts a confirmed payment whose answer has no order id.
+		b.WriteString("payment confirmed: the order was placed\n")
 	default:
 		fmt.Fprintf(&b, "order %s\n", r.ID)
 	}

@@ -51,10 +51,12 @@ type wayletURLResponse struct {
 }
 
 // PaymentOrder is the order a payment produced. The API answers it only once
-// the payment went through, and the web fails on an answer without an external
-// id, an agency or an address, so those three together are the confirmation
-// (see Confirmed). Only the fields the CLI reports are decoded; the address and
-// the agency are kept as pointers to tell an absent object from an empty one.
+// the payment went through, and the web fails on an answer without an agency or
+// an address, so those two together are the confirmation (see Confirmed). The
+// external id is not part of it: the web reads it as externalId || "", so an
+// order can be confirmed without one. Only the fields the CLI reports are
+// decoded; the address and the agency are kept as pointers to tell an absent
+// object from an empty one.
 type PaymentOrder struct {
 	ExternalID   FlexNumber     `json:"externalId" toml:"externalId"`
 	DeliveryDate string         `json:"deliveryDate" toml:"deliveryDate"`
@@ -63,10 +65,11 @@ type PaymentOrder struct {
 }
 
 // Confirmed reports whether the answer is the order of a paid payment: it
-// carries an external id and the agency and address objects the web needs to
-// show the order. Any other non-empty object is not a confirmation.
+// carries the agency and address objects the web needs to show the order, as
+// the web's own check does, whether or not it has an external id. Any other
+// non-empty object is not a confirmation.
 func (o PaymentOrder) Confirmed() bool {
-	return o.ExternalID != "" && o.Agency != nil && o.Address != nil
+	return o.Agency != nil && o.Address != nil
 }
 
 // CreateTemporaryOrder saves the cart that a payment will turn into an order.

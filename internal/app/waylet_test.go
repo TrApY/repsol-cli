@@ -924,3 +924,46 @@ func TestWayletWaitRespectsTheTotalDeadline(t *testing.T) {
 		})
 	}
 }
+
+// noIDConfirmation is the lookup answer of a paid payment that has an agency and
+// an address but no external id. The web accepts it (externalId || ""), so the
+// CLI must read it as a confirmation too.
+const noIDConfirmation = `{"deliveryDate":"2026-11-04","address":{"street":"Calle Falsa"},` +
+	`"agency":{"name":"Agencia Test","phone":"900 000 000"}}`
+
+func TestWayletConfirmationWithoutExternalID(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("order create --wait", func(t *testing.T) {
+		a, fake, _, _ := newWayletApp(t)
+		fake.ReplyNext(pathByPayment, 200, noIDConfirmation)
+
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", Wait: time.Minute})
+		if err != nil {
+			t.Fatalf("PlaceOrder: %v", err)
+		}
+		if res.PaymentStatus != "confirmed" || res.ID != "" {
+			t.Errorf("status = %q id = %q, want a confirmed payment without an id", res.PaymentStatus, res.ID)
+		}
+		if res.Agency.Name != "Agencia Test" {
+			t.Errorf("agency = %+v, want the agency of the answer", res.Agency)
+		}
+	})
+
+	t.Run("order payment", func(t *testing.T) {
+		a, fake, _, _ := newWayletApp(t)
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("PlaceOrder: %v", err)
+		}
+		fake.ReplyNext(pathByPayment, 200, noIDConfirmation)
+
+		view, err := a.PaymentStatus(ctx, res.PaymentID, 0)
+		if err != nil {
+			t.Fatalf("PaymentStatus: %v", err)
+		}
+		if view.Status != "confirmed" || view.ID != "" || view.DeliveryDate != "2026-11-04" {
+			t.Errorf("view = %+v, want a confirmed payment without an id", view)
+		}
+	})
+}

@@ -80,3 +80,36 @@ func TestPrettyWayletPayment(t *testing.T) {
 		}
 	}
 }
+
+// TestPrettyConfirmedPaymentWithoutOrderID checks that a confirmed payment whose
+// answer carries no external id never prints an empty "order " line: the web
+// accepts such an answer, so the CLI has to report it too.
+func TestPrettyConfirmedPaymentWithoutOrderID(t *testing.T) {
+	var buf bytes.Buffer
+	res := OrderResult{
+		OrderType:     "ORDER",
+		Payment:       "waylet",
+		PaymentStatus: "confirmed",
+		PaymentID:     "fake-payment-1",
+		DeliveryDate:  "2026-11-04",
+	}
+	if err := res.PrettyPrint(&buf); err != nil {
+		t.Fatalf("PrettyPrint: %v", err)
+	}
+	first, _, _ := strings.Cut(buf.String(), "\n")
+	if strings.TrimSpace(first) == "order" || strings.HasPrefix(first, "order \n") || strings.HasSuffix(first, " ") {
+		t.Errorf("first line %q is an empty order line", first)
+	}
+	if !strings.Contains(first, "confirmed") {
+		t.Errorf("first line %q does not say the payment was confirmed", first)
+	}
+
+	buf.Reset()
+	view := PaymentView{PaymentID: "p", Status: "confirmed", DeliveryDate: "2026-11-04"}
+	if err := view.PrettyPrint(&buf); err != nil {
+		t.Fatalf("PaymentView.PrettyPrint: %v", err)
+	}
+	if strings.Contains(buf.String(), "order:") {
+		t.Errorf("payment view output %q prints an empty order", buf.String())
+	}
+}
