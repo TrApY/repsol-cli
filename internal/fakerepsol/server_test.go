@@ -112,3 +112,76 @@ func TestFakeAgreesWithClients(t *testing.T) {
 		t.Fatalf("Count(/api/cart/check) = %d, want 1", got)
 	}
 }
+
+// TestFakeWayletAgreesWithClients drives the Waylet flow of the fake through the
+// real client: the cart, the payment page, the lookup that stays empty until the
+// payment is confirmed, and the history entry the payment leaves.
+func TestFakeWayletAgreesWithClients(t *testing.T) {
+	ctx := context.Background()
+	f := New()
+	defer f.Close()
+	hc := httpx.New("repsol-cli/test", nil)
+	api := &repsolapi.Client{BaseURL: f.APIURL(), HTTP: hc, Signer: stubSigner{signature: Signature}}
+
+	// 1. The agency accepts Waylet by default and stops when switched off.
+	for _, want := range []bool{true, false} {
+		f.SetWayletPayment(want)
+		info, err := api.Agency(ctx, repsolapi.Address{})
+		if err != nil {
+			t.Fatalf("Agency: %v", err)
+		}
+		if info.WayletPayment != want {
+			t.Fatalf("WayletPayment = %v, want %v", info.WayletPayment, want)
+		}
+	}
+
+	// 2. A cart answers a payment id and the payment page names it.
+	temp, err := api.CreateTemporaryOrder(ctx, repsolapi.TemporaryOrderRequest{
+		AgencyCode: AgencyCode, MaterialID: "153", Quantity: 1, UnitPrice: 18.89, DeliveryDate: "2026-11-04",
+	})
+	if err != nil {
+		t.Fatalf("CreateTemporaryOrder: %v", err)
+	}
+	link, err := api.WayletURL(ctx, temp.PaymentID)
+	if err != nil {
+		t.Fatalf("WayletURL: %v", err)
+	}
+	if want := "https://" + WayletHost + "/pay?paymentId=" + temp.PaymentID; link != want {
+		t.Fatalf("WayletURL = %q, want %q", link, want)
+	}
+
+	// 3. Nothing is confirmed, and the history is empty, until the payment is made.
+	if _, found, err := api.OrderByPaymentID(ctx, temp.PaymentID); err != nil || found {
+		t.Fatalf("OrderByPaymentID before paying = found %v, err %v; want not found", found, err)
+	}
+	if history, err := api.OrderHistory(ctx, 20, 0); err != nil || len(history) != 0 {
+		t.Fatalf("OrderHistory before paying = %d entries, err %v; want none", len(history), err)
+	}
+	if f.ConfirmWaylet("unknown") {
+		t.Fatal("ConfirmWaylet confirmed an unknown payment")
+	}
+
+	// 4. Paying confirms it once, and the order shows in both places.
+	if !f.ConfirmWaylet(temp.PaymentID) || f.ConfirmWaylet(temp.PaymentID) {
+		t.Fatal("ConfirmWaylet must confirm a payment exactly once")
+	}
+	order, found, err := api.OrderByPaymentID(ctx, temp.PaymentID)
+	if err != nil || !found {
+		t.Fatalf("OrderByPaymentID after paying = found %v, err %v; want found", found, err)
+	}
+	if order.ExternalID != "800000000000000003" || order.DeliveryDate != "2026-11-04" {
+		t.Fatalf("order = %+v, want external id 800000000000000003 and delivery 2026-11-04", order)
+	}
+	if history, err := api.OrderHistory(ctx, 20, 0); err != nil || len(history) != 1 {
+		t.Fatalf("OrderHistory after paying = %d entries, err %v; want 1", len(history), err)
+	}
+
+	// 5. The payment routes need a valid signature.
+	wrong := &repsolapi.Client{BaseURL: f.APIURL(), HTTP: hc, Signer: stubSigner{signature: "wrong-signature"}}
+	if _, err := wrong.CreateTemporaryOrder(ctx, repsolapi.TemporaryOrderRequest{}); apperr.From(err).Category != apperr.Auth {
+		t.Fatalf("CreateTemporaryOrder with a wrong signature: %v, want an auth error", err)
+	}
+	if _, _, err := wrong.OrderByPaymentID(ctx, temp.PaymentID); apperr.From(err).Category != apperr.Auth {
+		t.Fatalf("OrderByPaymentID with a wrong signature: %v, want an auth error", err)
+	}
+}

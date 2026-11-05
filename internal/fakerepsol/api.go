@@ -24,12 +24,13 @@ func (s *Server) handleAddressMaps(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAgency(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	code := s.agency
+	waylet := s.waylet
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, repsolapi.AgencyInfo{
 		AgencyCode:    code,
 		OnlinePayment: true,
-		WayletPayment: true,
+		WayletPayment: waylet,
 		AllowsTip:     true,
 	})
 }

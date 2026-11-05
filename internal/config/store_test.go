@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/felipe9962/repsol-cli/internal/apperr"
 	"github.com/felipe9962/repsol-cli/internal/repsolapi"
@@ -358,5 +359,121 @@ func TestInvalidTOMLNeverLeaksContent(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secret) {
 		t.Errorf("error message leaks file content: %v", err)
+	}
+}
+
+func TestPendingPayment(t *testing.T) {
+	s := newStore(t)
+	started := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
+
+	if _, found, err := s.LoadPendingPayment("default"); err != nil || found {
+		t.Fatalf("LoadPendingPayment on a missing file = found %v, err %v; want neither", found, err)
+	}
+
+	if err := s.SavePendingPayment("default", PendingPayment{PaymentID: "p-1", StartedAt: started}); err != nil {
+		t.Fatalf("SavePendingPayment: %v", err)
+	}
+	got, found, err := s.LoadPendingPayment("default")
+	if err != nil || !found {
+		t.Fatalf("LoadPendingPayment = found %v, err %v; want the payment", found, err)
+	}
+	if got.PaymentID != "p-1" || !got.StartedAt.Equal(started) {
+		t.Errorf("pending payment = %+v, want p-1 started at %v", got, started)
+	}
+
+	// The id is as private as a credential, and other profiles are not touched.
+	path, err := s.pendingPath("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %o, want 0600", info.Mode().Perm())
+	}
+	if _, found, _ := s.LoadPendingPayment("other"); found {
+		t.Error("another profile sees the payment")
+	}
+	if data, err := os.ReadFile(s.Paths.Config); err == nil && strings.Contains(string(data), "p-1") {
+		t.Error("the payment id reached config.toml")
+	}
+
+	// A payment started later is not dropped by the resolution of an older one.
+	if err := s.ClearPendingPayment("default", "p-0"); err != nil {
+		t.Fatalf("ClearPendingPayment of another id: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); !found {
+		t.Fatal("clearing p-0 dropped p-1")
+	}
+	if err := s.ClearPendingPayment("default", "p-1"); err != nil {
+		t.Fatalf("ClearPendingPayment: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); found {
+		t.Error("the payment is still pending after it was cleared")
+	}
+	if err := s.ClearPendingPayment("default", ""); err != nil {
+		t.Errorf("clearing a missing payment: %v", err)
+	}
+
+	if err := s.SavePendingPayment("Bad Name", PendingPayment{PaymentID: "x"}); err == nil {
+		t.Error("an invalid profile name was accepted")
+	}
+}
+
+func TestLogoutKeepsThePendingPayment(t *testing.T) {
+	s := newStore(t)
+	if err := s.SavePendingPayment("default", PendingPayment{PaymentID: "p-1"}); err != nil {
+		t.Fatalf("SavePendingPayment: %v", err)
+	}
+	if err := s.UpdateCredentials("default", func(c *Credentials) error { c.LoginToken = "t"; return nil }); err != nil {
+		t.Fatalf("UpdateCredentials: %v", err)
+	}
+	if _, err := s.DeleteCredentials("default"); err != nil {
+		t.Fatalf("DeleteCredentials: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); !found {
+		t.Error("deleting the credentials dropped the pending payment")
+	}
+}
+
+func TestDiscardPendingPayment(t *testing.T) {
+	s := newStore(t)
+	if err := s.DiscardPendingPayment("default"); err != nil {
+		t.Fatalf("DiscardPendingPayment with nothing remembered: %v", err)
+	}
+
+	// A readable payment goes, whatever its id.
+	if err := s.SavePendingPayment("default", PendingPayment{PaymentID: "p-1"}); err != nil {
+		t.Fatalf("SavePendingPayment: %v", err)
+	}
+	if err := s.DiscardPendingPayment("default"); err != nil {
+		t.Fatalf("DiscardPendingPayment: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); found {
+		t.Error("the payment is still remembered")
+	}
+
+	// So does a file that cannot be read, which is what the call is for.
+	path, err := s.pendingPath("default")
+	if err != nil {
+		t.Fatalf("pendingPath: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("[[not toml"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, _, err := s.LoadPendingPayment("default"); err == nil {
+		t.Fatal("LoadPendingPayment of a damaged file succeeded")
+	}
+	if err := s.DiscardPendingPayment("default"); err != nil {
+		t.Fatalf("DiscardPendingPayment of a damaged file: %v", err)
+	}
+	if _, found, err := s.LoadPendingPayment("default"); err != nil || found {
+		t.Errorf("after the discard: found %v, err %v; want neither", found, err)
+	}
+
+	if err := s.DiscardPendingPayment("Bad Name"); err == nil {
+		t.Error("DiscardPendingPayment accepted an invalid profile name")
 	}
 }

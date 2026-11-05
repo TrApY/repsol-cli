@@ -5,8 +5,8 @@ Guidance for coding agents working on this repository.
 ## What this project is
 
 `repsol-cli` is a Go CLI and MCP server that orders bottled gas from Repsol's
-`pidetubombona` web application for the owner, paid on delivery and without a
-confirmation prompt. It talks to the web application's private JSON API with the
+`pidetubombona` web application for the owner, paid on delivery (or, when the
+owner asks for it, with Waylet) and without a confirmation prompt. It talks to the web application's private JSON API with the
 owner's own account.
 
 ## Domain vocabulary
@@ -26,6 +26,16 @@ owner's own account.
   from the address with `GET /agency` and changes with the locality.
 - **Material id** — the numeric id of a product (`153` is Butano 12.5 kg).
   `materialId` is a string on the wire.
+- **Waylet payment** — the owner pays on a Waylet page instead of on delivery.
+  `POST /cart` saves a temporary order and returns a `paymentId`;
+  `POST /waylet-payment/url` returns the page; once the owner pays, Repsol
+  creates the order, and `GET /order-history/payment-id` returns it. The CLI
+  never confirms an order: it only reads that lookup. The payment id is kept in
+  a private per-profile file while the payment is unpaid, or paid with its
+  delivery still due, and any other order is refused meanwhile
+  (`payment_pending`, `payment_check_failed` when it could not be looked up,
+  `pending_order` when it was paid). `--force` skips only the order history;
+  giving a payment up is `--abandon` / `--abandon-payment`.
 - **Pending** — the history has no status field, so a delivery is considered
   pending when its `deliveryDate` is today or later in `Europe/Madrid`.
 
@@ -41,7 +51,8 @@ owner's own account.
   message, the error envelope or an MCP response. The transport redacts them;
   keep it that way.
 - **Never retry a write.** A failed order request may still have reached
-  Repsol. It exits 9 (`order_outcome_unknown`) instead of retrying.
+  Repsol. It exits 9 (`order_outcome_unknown`) instead of retrying. The two
+  writes of a Waylet payment are not orders and are sent once as well.
 - **Run `make test lint`** before you finish.
 - Code, comments, identifiers, commit messages and docs are in English.
 

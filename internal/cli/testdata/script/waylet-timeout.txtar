@@ -1,0 +1,33 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+
+# Nobody pays: the wait ends with a timeout that is not retryable, because
+# running the command again would start a second payment, and that names how to
+# keep waiting for the same one.
+! exec repsol --error-format json order create --pay waylet --wait=1s
+stderr '"code":"payment_timeout"'
+stderr '"exit_code":6'
+stderr '"retryable":false'
+! stderr '"retryable":true'
+stderr 'repsol order payment fake-payment-1 --wait'
+stderr 'https://waylet.example.test'
+fake count /api/cart 1
+fake count /api/waylet-payment/url 1
+fake count /api/order 0
+
+# The payment is still open, so another order is held back.
+! exec repsol --error-format json order create --pay waylet
+stderr '"code":"payment_pending"'
+fake count /api/cart 1
+
+# The same wait on the lookup command ends the same way.
+! exec repsol --error-format json order payment fake-payment-1 --wait=1s
+stderr '"code":"payment_timeout"'
+stderr '"retryable":false'
+
+# The payment still completes later.
+fake waylet pay fake-payment-1
+exec repsol order payment fake-payment-1 --wait=1s
+stdout '"payment_status": "confirmed"'

@@ -34,8 +34,17 @@ const (
 	orderTypeOrder      = "ORDER"
 )
 
-// paymentOnDelivery is the payment method of every order the CLI places.
-const paymentOnDelivery = "on_delivery"
+// The payment methods of an order, as OrderResult.Payment reports them.
+const (
+	paymentOnDelivery = "on_delivery"
+	paymentWaylet     = "waylet"
+)
+
+// The values of PlaceOrderInput.Pay.
+const (
+	payDelivery = "delivery"
+	payWaylet   = "waylet"
+)
 
 // solicitudeNote tells the owner that a solicitude is a request, not a
 // confirmed order. Repsol validates it by hand, outside the API, and may contact
@@ -54,12 +63,25 @@ type PlaceOrderInput struct {
 	Quantity int
 	// Date is the requested delivery date as YYYY-MM-DD, or empty.
 	Date string
-	// Pay is the payment method: empty or "delivery".
+	// Pay is the payment method: empty or "delivery" for payment on delivery,
+	// "waylet" for a Waylet payment the owner completes on a payment page.
 	Pay string
+	// Wait, for a Waylet payment, is how long to poll for the payment to be
+	// confirmed after the payment link is ready. Zero returns the link at once.
+	Wait time.Duration
+	// OnPaymentLink, when set, is called once with the payment link before the
+	// wait starts, so the owner can open it while the call is still waiting.
+	OnPaymentLink func(PaymentLink)
 	// DryRun plans the order without writing it.
 	DryRun bool
-	// Force skips the pending-order guard.
+	// Force skips the pending-order guard, which reads the order history. It
+	// does not skip the remembered Waylet payment: that one is looked up all the
+	// same, because it may have been paid since.
 	Force bool
+	// AbandonPayment forgets the unpaid Waylet payment the profile remembers
+	// (or its damaged state file) and goes on with the order. It never forgets a
+	// payment that was paid: that delivery is still due.
+	AbandonPayment bool
 }
 
 // AgencyView is the agency of an order, as the CLI and the MCP server print it.
@@ -96,10 +118,22 @@ type OrderResult struct {
 	Address string `json:"address"`
 	// Agency is the agency that will deliver the order.
 	Agency AgencyView `json:"agency"`
-	// Payment is always "on_delivery".
+	// Payment is "on_delivery", or "waylet" for a Waylet payment.
 	Payment string `json:"payment"`
+	// PaymentURL is the Waylet page the owner opens to pay. It is set once the
+	// payment was started, never on a dry run.
+	PaymentURL string `json:"payment_url,omitempty"`
+	// PaymentID names the Waylet payment; "repsol order payment" takes it.
+	PaymentID string `json:"payment_id,omitempty"`
+	// PaymentStatus is "awaiting_payment" until the payment is confirmed, then
+	// "confirmed". It is set only for a Waylet payment that was started.
+	PaymentStatus string `json:"payment_status,omitempty"`
 	// Note is a caveat for the owner, set when OrderType is SOLICITUDE.
 	Note string `json:"note,omitempty"`
+	// Notices tell the owner what the command did to a remembered Waylet
+	// payment on its own: forgot an unpaid one that had expired or was
+	// abandoned, or removed a damaged state file.
+	Notices []string `json:"notices,omitempty"`
 }
 
 // PlaceOrder validates the input, plans the order and, unless it is a dry run,
@@ -122,11 +156,16 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		return OrderResult{}, err
 	}
 
-	agencyCode, err := a.currentAgency(ctx, addr)
+	agency, err := a.agencyInfo(ctx, addr)
 	if err != nil {
 		return OrderResult{}, err
 	}
+	agencyCode := agency.AgencyCode
 	addr.AgencyCode = agencyCode
+	if in.Pay == payWaylet && !agency.WayletPayment {
+		return OrderResult{}, wayletUnavailable(
+			fmt.Sprintf("agency %s does not accept Waylet payments", agencyCode))
+	}
 
 	unitPrice, err := a.pricedMaterial(ctx, agencyCode, info.MaterialID)
 	if err != nil {
@@ -142,8 +181,10 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		return OrderResult{}, err
 	}
 
-	// The lock covers the pending guard, the cart check and the write, so two
-	// orders started at the same time cannot both pass the guard.
+	// The lock covers the pending guards, the cart check and the write, so two
+	// orders started at the same time cannot both pass the guards. A Waylet
+	// order started without --wait releases it when it prints the link, and the
+	// payment guard is what remembers it from then on.
 	if !in.DryRun {
 		release, err := a.lockOrder()
 		if err != nil {
@@ -152,6 +193,10 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		defer release()
 	}
 
+	notices, err := a.ensurePaymentResolved(ctx, in)
+	if err != nil {
+		return OrderResult{}, err
+	}
 	if !in.Force {
 		if err := a.ensureNoPendingOrder(ctx, agencyCode, addr.LocalityCode); err != nil {
 			return OrderResult{}, err
@@ -180,6 +225,11 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 	if err != nil {
 		return OrderResult{}, err
 	}
+	if in.Pay == payWaylet {
+		if err := wayletAllowed(branch, check); err != nil {
+			return OrderResult{}, err
+		}
+	}
 
 	result := OrderResult{
 		DryRun:       in.DryRun,
@@ -194,18 +244,24 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		Agency:       AgencyView{Code: agencyCode},
 		Payment:      paymentOnDelivery,
 	}
+	if in.Pay == payWaylet {
+		result.Payment = paymentWaylet
+	}
 	if branch == orderTypeSolicitude {
 		result.Note = solicitudeNote
 	}
+	result.Notices = notices
 	if in.DryRun {
 		return result, nil
+	}
+	if in.Pay == payWaylet {
+		return a.startWayletPayment(ctx, in, result, scheduleMode, addr, unitPrice, date)
 	}
 
 	placed, err := a.writeOrder(ctx, branch, check, addr, info.MaterialID, in.Quantity, unitPrice, date)
 	if err != nil {
 		return OrderResult{}, err
 	}
-
 	result.ID = placed.ExternalID
 	if placed.DeliveryDate != "" {
 		result.DeliveryDate = placed.DeliveryDate
@@ -221,10 +277,18 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 // validateOrderInput checks the payment method and the shape of the date before
 // any request is sent.
 func validateOrderInput(in PlaceOrderInput) error {
-	if in.Pay != "" && in.Pay != "delivery" {
+	if in.Pay != "" && in.Pay != payDelivery && in.Pay != payWaylet {
 		return apperr.New(apperr.Usage, "unsupported_payment",
-			fmt.Sprintf("unsupported payment method %q: orders are paid on delivery", in.Pay)).
-			WithHint("use --pay delivery")
+			fmt.Sprintf("unsupported payment method %q: orders are paid on delivery or with Waylet", in.Pay)).
+			WithHint("use --pay delivery or --pay waylet")
+	}
+	if in.Wait < 0 {
+		return invalidWait(in.Wait)
+	}
+	if in.Wait > 0 && in.Pay != payWaylet {
+		return apperr.New(apperr.Usage, "wait_requires_waylet",
+			"--wait only applies to a Waylet payment").
+			WithHint("add --pay waylet, or drop --wait")
 	}
 	if in.Date != "" {
 		if _, err := time.Parse(time.DateOnly, in.Date); err != nil {
@@ -386,6 +450,28 @@ func orderBranch(check repsolapi.CartCheck) (string, error) {
 			fmt.Sprintf("the cart check returned an unsupported order type %q", check.OrderType)).
 			WithHint(webFlowHint)
 	}
+}
+
+// wayletAllowed refuses a Waylet payment the web would not offer for this cart.
+// The web shows its online payment methods only for an order (not a request)
+// that is not billable, is not blocked by the order policy and is not a
+// calendar delivery without a date, and an expired inspection leaves it only
+// the payment on delivery. A delivery order is not subject to these refusals.
+func wayletAllowed(branch string, check repsolapi.CartCheck) error {
+	switch {
+	case branch != orderTypeOrder:
+		return wayletUnavailable(
+			"this order is a request that Repsol validates by hand, and a request cannot be paid online")
+	case check.InspectionExpired:
+		return wayletUnavailable("the installation inspection has expired, so the order can only be paid on delivery")
+	case check.Billable:
+		return wayletUnavailable("this order has to be billed, and Repsol offers no online payment for it")
+	case check.BlockedPolicy:
+		return wayletUnavailable("the order policy of this address blocks online payments")
+	case check.IsCalendarDeliveryWithoutDate:
+		return wayletUnavailable("the delivery calendar of this product has no date for it, so it cannot be paid online")
+	}
+	return nil
 }
 
 // writeOrder performs the single write the cart check selected. It is never

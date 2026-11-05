@@ -41,13 +41,15 @@ picker. `repsol` turns it into one command that an agent can run on its own:
 
 - `repsol order create` places a real order for a bottle, paid on delivery, with
   no confirmation prompt, and prints the order id and delivery date.
+- `repsol order create --pay waylet` pays with Waylet instead: it prints the
+  payment link, and `--wait` stays until Repsol confirms the payment.
 - You import your session once. After that, agents act on their own, and the
   CLI logs in again by itself if you let it keep your password.
 - Agents can also read the catalog and prices, the stored delivery address, the
   available delivery dates, the order history and the last order.
-- It refuses to place a second delivery while one is pending, places one order
-  per profile at a time, and never retries an order request whose outcome is
-  unknown.
+- It refuses to place a second delivery while one is pending or a Waylet payment
+  is unpaid or paid and still due, places one order per profile at a time, and
+  never retries an order request whose outcome is unknown.
 
 ## Quickstart
 
@@ -177,7 +179,10 @@ Before writing, the CLI reads your recent orders and refuses to place a second
 delivery to the same address while one is still pending. That brake exists to
 stop accidental duplicates, not to ask permission: a delivery you cancelled by
 phone still looks pending until its date passes, and `--force` covers that case
-when you explicitly want another delivery.
+when you explicitly want another delivery. `--force` only skips that check of the
+order history: an unpaid Waylet link is looked up all the same, and giving one up
+is its own decision (`order create --abandon-payment`, or
+`order payment --abandon`).
 
 ### Order requests are not confirmed orders
 
@@ -216,7 +221,8 @@ still pending, the agent reports it to you, and a second delivery goes through
 | `address set / show` | resolve a free-text address once and store it on the profile |
 | `catalog list` | products the agency sells at the stored address, with prices and limits |
 | `schedule list` | delivery dates the agency offers for a product |
-| `order create` | place a pay-on-delivery order (`--dry-run`, `--product`, `--qty`, `--date`, `--force`) |
+| `order create` | place an order, paid on delivery or with Waylet (`--dry-run`, `--product`, `--qty`, `--date`, `--pay`, `--wait`, `--force`, `--abandon-payment`) |
+| `order payment` | check a Waylet payment (`--wait`), or forget the unpaid one the profile remembers (`--abandon`) |
 | `order list / last / show` | the newest orders, the last one, or one by its eight-digit reference |
 | `doctor` | check the config, session, API, address and agency without writing |
 | `config path / get / set / list` | the configuration files and values |

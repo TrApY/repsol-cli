@@ -1,0 +1,51 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+
+# A dry run plans the Waylet payment and creates nothing.
+exec repsol order create --pay waylet --dry-run
+stdout '"dry_run": true'
+stdout '"payment": "waylet"'
+! stdout 'payment_url'
+fake count /api/cart 0
+fake count /api/waylet-payment/url 0
+
+# Without --wait the command prints the link and places nothing.
+exec repsol order create --pay waylet
+stdout '"payment": "waylet"'
+stdout '"payment_status": "awaiting_payment"'
+stdout '"payment_id": "fake-payment-1"'
+stdout '"payment_url": "https://waylet.example.test/pay\?paymentId=fake-payment-1"'
+! stdout '"id":'
+fake count /api/cart 1
+fake count /api/waylet-payment/url 1
+fake count /api/order 0
+fake count /api/solicitude 0
+
+# The payment is not confirmed until the owner pays it.
+exec repsol order payment fake-payment-1
+stdout '"payment_status": "awaiting_payment"'
+fake waylet pay fake-payment-1
+exec repsol order payment fake-payment-1
+stdout '"payment_status": "confirmed"'
+stdout '"id": "800000000000000003"'
+stdout '"delivery_date":'
+
+# The paid order is pending, so it blocks another one.
+! exec repsol --error-format json order create --pay waylet
+stderr '"code":"pending_order"'
+stderr '"exit_code":8'
+! exec repsol --error-format json order create
+stderr '"code":"pending_order"'
+fake count /api/cart 1
+fake count /api/solicitude 0
+
+# Bad input.
+! exec repsol --error-format json order create --pay delivery --wait=1m
+stderr '"code":"wait_requires_waylet"'
+stderr '"exit_code":2'
+! exec repsol --error-format json order create --pay card
+stderr '"code":"unsupported_payment"'
+! exec repsol --error-format json order payment ' '
+stderr '"code":"invalid_payment_id"'

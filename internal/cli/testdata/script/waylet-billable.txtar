@@ -1,0 +1,17 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+
+# The cart check says the order has to be billed, and the web offers no online
+# payment for that: Waylet is refused before any write, and delivery still works.
+fake check order-billable
+! exec repsol --error-format json order create --pay waylet
+stderr '"code":"waylet_unavailable"'
+stderr '"exit_code":8'
+stderr 'billed'
+stderr '--pay delivery'
+fake count /api/cart 0
+fake count /api/waylet-payment/url 0
+exec repsol order create --pay delivery
+stdout '"payment": "on_delivery"'
+fake count /api/order 1

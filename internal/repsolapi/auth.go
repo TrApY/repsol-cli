@@ -127,6 +127,12 @@ func addTelemetry(h http.Header, t *Telemetry, endpoint string) {
 
 // signedGET performs a retryable GET carrying the auth headers.
 func (c *Client) signedGET(ctx context.Context, auth Auth, endpoint string, params ...queryParam) (*httpx.Response, error) {
+	return c.signedRead(ctx, auth, endpoint, true, params...)
+}
+
+// signedRead is signedGET with the choice of retrying. A read that is polled
+// by its caller sends one request per poll.
+func (c *Client) signedRead(ctx context.Context, auth Auth, endpoint string, retry bool, params ...queryParam) (*httpx.Response, error) {
 	target := strings.TrimRight(c.BaseURL, "/") + endpoint
 	if qs := encodeQuery(params); qs != "" {
 		target += "?" + qs
@@ -135,7 +141,7 @@ func (c *Client) signedGET(ctx context.Context, auth Auth, endpoint string, para
 		Method:   http.MethodGet,
 		URL:      target,
 		Header:   authHeaders(auth),
-		Retry:    true,
+		Retry:    retry,
 		Endpoint: endpoint,
 	})
 }

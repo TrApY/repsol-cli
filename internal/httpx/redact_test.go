@@ -74,7 +74,7 @@ func TestRedactBodyCoversSensitiveKeys(t *testing.T) {
 		"postalcode", "riskcontext", "sessioninfo", "emails", "loginids", "userinfo",
 		"identities", "nickname", "uidsig", "loginprovideruid", "provideruid",
 		"address", "agency", "locality", "localitycode", "municipality",
-		"municipalitycode", "streetcode",
+		"municipalitycode", "streetcode", "paymentid", "wayletredirectionpaymenturl",
 	}
 
 	values := url.Values{}

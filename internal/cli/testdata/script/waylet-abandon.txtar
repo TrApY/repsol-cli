@@ -1,0 +1,71 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+
+# Nothing is remembered yet.
+! exec repsol --error-format json order payment --abandon
+stderr '"code":"no_pending_payment"'
+stderr '"exit_code":4'
+
+# A payment link nobody paid yet blocks every order, --force included: --force
+# only skips the history, and the payment is looked up all the same.
+exec repsol order create --pay waylet
+stdout '"payment_id": "fake-payment-1"'
+! exec repsol --error-format json order create --force
+stderr '"code":"payment_pending"'
+stderr '--abandon-payment'
+fake count /api/order 0
+fake count /api/solicitude 0
+
+# Abandoning needs the explicit command; a wrong id is refused, a missing one is
+# the remembered payment, and --wait makes no sense with it.
+! exec repsol --error-format json order payment other-payment --abandon
+stderr '"code":"payment_mismatch"'
+! exec repsol --error-format json order payment --abandon --wait=1s
+stderr '"code":"abandon_with_wait"'
+! exec repsol order payment
+stderr 'accepts 1 arg'
+exec repsol order payment --abandon
+stdout '"payment_status": "abandoned"'
+stdout '"payment_id": "fake-payment-1"'
+! stdout '"note"'
+
+# Ordering is possible again.
+exec repsol order create --dry-run
+stdout '"dry_run": true'
+
+# A payment that was paid is never abandoned by an order: its delivery is due,
+# and --force does not skip it either.
+exec repsol order create --pay waylet
+fake waylet pay fake-payment-2
+! exec repsol --error-format json order create --abandon-payment --force
+stderr '"code":"pending_order"'
+stderr '800000000000000003'
+stderr 'repsol order payment fake-payment-2 --abandon'
+fake count /api/order 0
+
+# Only the explicit command lets go of it, and it says what it found.
+exec repsol --format pretty order payment fake-payment-2 --abandon
+stdout 'payment status: abandoned'
+stdout 'order: 800000000000000003'
+stdout 'note: the payment was paid'
+
+# A state file that cannot be read blocks orders and says how to clear it.
+cp bad.toml $WORK/.config/repsol-cli/payment-default.toml
+! exec repsol --error-format json order create --dry-run
+stderr '"code":"payment_state_invalid"'
+stderr 'repsol order payment --abandon'
+# (--force: the paid order of the steps above is still pending in the history)
+exec repsol order create --dry-run --abandon-payment --force
+stdout 'could not be read'
+exec repsol order payment --abandon
+stdout '"payment_status": "abandoned"'
+stdout 'could not be read'
+! exists $WORK/.config/repsol-cli/payment-default.toml
+exec repsol order create --dry-run --force
+stdout '"dry_run": true'
+
+-- bad.toml --
+[pending_payment
+payment_id = 

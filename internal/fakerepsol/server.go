@@ -94,12 +94,26 @@ type Server struct {
 	recorded map[string][]Recorded
 	rejected map[string]bool
 	failNext map[string]int
+	replyNxt map[string]reply
+	dropNext map[string]bool
 	today    time.Time
 	history  []repsolapi.HistoryEntry
 	check    repsolapi.CartCheck
 	agency   string
 	writes   int
 	held     map[string]*hold
+
+	waylet         bool
+	wayletPayAfter int
+	payments       map[string]*payment
+	paymentOrder   []string
+	confirmedCount int
+}
+
+// reply is a canned answer armed for the next request to a path.
+type reply struct {
+	status int
+	body   string
 }
 
 // hold parks the next request to a path until the test releases it.
@@ -114,9 +128,13 @@ func New() *Server {
 		recorded: make(map[string][]Recorded),
 		rejected: make(map[string]bool),
 		failNext: make(map[string]int),
+		replyNxt: make(map[string]reply),
+		dropNext: make(map[string]bool),
 		held:     make(map[string]*hold),
 		check:    repsolapi.CartCheck{Status: "EE04", OrderType: "SOLICITUDE"},
 		agency:   AgencyCode,
+		waylet:   true,
+		payments: make(map[string]*payment),
 	}
 	s.routes = map[string]route{
 		"/gigya/accounts.getAccountInfo":  {http.MethodPost, s.handleAccountInfo},
@@ -136,6 +154,10 @@ func New() *Server {
 		"/api/cart/check": {http.MethodPost, s.handleCartCheck},
 		"/api/solicitude": {http.MethodPost, s.handleSolicitude},
 		"/api/order":      {http.MethodPost, s.handleOrder},
+
+		"/api/cart":                     {http.MethodPost, s.handleCart},
+		"/api/waylet-payment/url":       {http.MethodPost, s.handleWayletURL},
+		"/api/order-history/payment-id": {http.MethodGet, s.handleOrderByPayment},
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.serve)
@@ -214,6 +236,25 @@ func (s *Server) FailNext(path string, status int) {
 	s.failNext[path] = status
 }
 
+// ReplyNext arms one canned answer: the next request to path gets status and
+// body as JSON. It models answers FailNext cannot, such as the error envelope
+// the API sends with HTTP 200.
+func (s *Server) ReplyNext(path string, status int, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replyNxt[path] = reply{status: status, body: body}
+}
+
+// DropNext arms one transport failure: the next request to path is received and
+// recorded, then its connection is closed without an answer. The client sees a
+// failure after it sent the request, which is the case a write must never
+// retry.
+func (s *Server) DropNext(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropNext[path] = true
+}
+
 // Hold parks the next request to path after it is recorded and before it is
 // answered. entered is closed once that request arrives; release lets it go on
 // and may be called more than once.
@@ -264,8 +305,18 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.takeDrop(r.URL.Path) {
+		dropConnection(w)
+		return
+	}
 	if status, ok := s.takeFailure(r.URL.Path); ok {
 		w.WriteHeader(status)
+		return
+	}
+	if rep, ok := s.takeReply(r.URL.Path); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(rep.status)
+		_, _ = w.Write([]byte(rep.body))
 		return
 	}
 
@@ -313,6 +364,41 @@ func (s *Server) takeFailure(path string) (int, bool) {
 		delete(s.failNext, path)
 	}
 	return status, ok
+}
+
+// takeReply consumes an armed canned answer for path, if there is one.
+func (s *Server) takeReply(path string) (reply, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rep, ok := s.replyNxt[path]
+	if ok {
+		delete(s.replyNxt, path)
+	}
+	return rep, ok
+}
+
+// takeDrop consumes an armed connection drop for path, if there is one.
+func (s *Server) takeDrop(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ok := s.dropNext[path]
+	delete(s.dropNext, path)
+	return ok
+}
+
+// dropConnection closes the connection of a request without answering it.
+func dropConnection(w http.ResponseWriter) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	_ = conn.Close()
 }
 
 // todayDate returns the fake's current date in Europe/Madrid, at midnight.
