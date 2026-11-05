@@ -111,7 +111,7 @@ func (a *App) startWayletPayment(
 	if err != nil {
 		return OrderResult{}, err
 	}
-	a.closePayment(temp.PaymentID)
+	a.settlePaid(temp.PaymentID, order)
 	result.PaymentStatus = paymentConfirmed
 	result.ID = string(order.ExternalID)
 	if order.DeliveryDate != "" {
@@ -176,17 +176,44 @@ func urlOutcomeUnknown(err error) bool {
 
 // closePayment forgets a payment: the one named, or whichever is open when the
 // id is empty. A failure to write the state is ignored: the next order looks
-// the payment up again, finds it paid, and closes it then.
+// the payment up again and settles it then.
 func (a *App) closePayment(paymentID string) {
 	_ = a.store.ClearPendingPayment(a.profile, paymentID)
 }
 
+// deliveryPending reports whether the paid order is still to be delivered: its
+// delivery date is today or later in Madrid, the rule of the history guard.
+func (a *App) deliveryPending(order repsolapi.PaymentOrder) bool {
+	return order.DeliveryDate != "" && order.DeliveryDate >= a.today()
+}
+
+// settlePaid is what a payment that was seen paid leaves behind. The payment is
+// forgotten only once it can no longer cause a duplicate, which is when its
+// delivery is behind us: until then it stays remembered, because the history
+// guard cannot be trusted to list the order already, or under the same agency
+// and locality, and the next order has to be refused on the payment's own word
+// (see ensurePaymentResolved).
+func (a *App) settlePaid(paymentID string, order repsolapi.PaymentOrder) {
+	if a.deliveryPending(order) {
+		return
+	}
+	a.closePayment(paymentID)
+}
+
 // ensurePaymentResolved refuses an order while the profile has a Waylet payment
-// it has not seen paid. It asks Repsol first: a payment that was paid since is
-// closed (unless this is a dry run, which writes nothing), and the order the
-// payment created is in the history, where the pending-order guard sees it.
-// What it cannot confirm paid it treats as open, and it never guesses the
-// session: an authentication failure is reported as it is.
+// that can still produce a delivery. It asks Repsol first:
+//
+//   - a payment that was paid and whose delivery is today or later refuses the
+//     order with pending_order, naming the order and its date, without looking
+//     at the history: the history may not list it yet, or not for this agency
+//     and locality. The payment stays remembered. A paid payment whose delivery
+//     is behind us is forgotten (unless this is a dry run, which writes
+//     nothing) and the order goes on to the history guard;
+//   - a payment that is not paid, or whose lookup failed, refuses the order,
+//     and the two are told apart: the first is payment_pending, the second
+//     payment_check_failed, "could not check".
+//
+// It never guesses the session: an authentication failure is reported as it is.
 func (a *App) ensurePaymentResolved(ctx context.Context, dryRun bool) error {
 	pending, found, err := a.store.LoadPendingPayment(a.profile)
 	if err != nil {
@@ -195,13 +222,16 @@ func (a *App) ensurePaymentResolved(ctx context.Context, dryRun bool) error {
 	if !found {
 		return nil
 	}
-	_, paid, err := a.api.OrderByPaymentID(ctx, pending.PaymentID)
+	order, paid, err := a.api.OrderByPaymentID(ctx, pending.PaymentID)
 	switch {
 	case ctx.Err() != nil:
 		return err
 	case err != nil && apperr.From(err).Category == apperr.Auth:
 		return err
 	case err == nil && paid:
+		if a.deliveryPending(order) {
+			return paidPaymentPending(order)
+		}
 		if !dryRun {
 			a.closePayment(pending.PaymentID)
 		}
@@ -211,17 +241,35 @@ func (a *App) ensurePaymentResolved(ctx context.Context, dryRun bool) error {
 }
 
 // paymentPending is the refusal of an order while a payment is open. lookupErr,
-// when set, is why the payment could not be confirmed paid.
+// when set, is why the payment could not be confirmed either way: then the
+// refusal says so, instead of claiming that the payment is unpaid.
 func paymentPending(p config.PendingPayment, lookupErr error) error {
-	e := apperr.New(apperr.Refused, "payment_pending",
-		fmt.Sprintf("a Waylet payment started at %s is not paid yet",
-			p.StartedAt.In(madrid).Format("2006-01-02 15:04"))).
+	started := p.StartedAt.In(madrid).Format("2006-01-02 15:04")
+	if lookupErr != nil {
+		typed := apperr.From(lookupErr)
+		e := apperr.New(apperr.Refused, "payment_check_failed",
+			fmt.Sprintf("could not check whether the Waylet payment started at %s was paid", started)).
+			WithHint(fmt.Sprintf("nothing was ordered: try again, or run \"repsol order payment %s\" to check it", p.PaymentID))
+		e.Err = lookupErr
+		e.Retryable = typed.Retryable
+		return e
+	}
+	return apperr.New(apperr.Refused, "payment_pending",
+		fmt.Sprintf("a Waylet payment started at %s is not paid yet", started)).
 		WithHint(fmt.Sprintf("open its link and pay, then run \"repsol order payment %s --wait\"; "+
 			"pass --force only if the owner abandoned that payment and wants a new order", p.PaymentID))
-	if lookupErr != nil {
-		e.Err = lookupErr
+}
+
+// paidPaymentPending is the refusal of an order while a Waylet payment that was
+// paid has a delivery still to come.
+func paidPaymentPending(order repsolapi.PaymentOrder) error {
+	what := "the order of a Waylet payment"
+	if order.ExternalID != "" {
+		what = fmt.Sprintf("order %s", order.ExternalID)
 	}
-	return e
+	return apperr.New(apperr.Refused, "pending_order",
+		fmt.Sprintf("%s for %s was paid with Waylet and is still pending", what, order.DeliveryDate)).
+		WithHint(forceOrderHint)
 }
 
 // PaymentStatus looks up the order a Waylet payment produced. With a zero wait
@@ -256,7 +304,7 @@ func (a *App) PaymentStatus(ctx context.Context, paymentID string, wait time.Dur
 	if !found {
 		return PaymentView{PaymentID: paymentID, Status: paymentAwaiting}, nil
 	}
-	a.closePayment(paymentID)
+	a.settlePaid(paymentID, order)
 	view := PaymentView{
 		PaymentID:    paymentID,
 		Status:       paymentConfirmed,
