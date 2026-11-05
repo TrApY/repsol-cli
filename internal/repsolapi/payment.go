@@ -1,0 +1,143 @@
+package repsolapi
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/url"
+
+	"github.com/felipe9962/repsol-cli/internal/apperr"
+)
+
+// The endpoints of the Waylet payment flow.
+const (
+	temporaryOrderPath = "/cart"
+	wayletURLPath      = "/waylet-payment/url"
+	orderByPaymentPath = "/order-history/payment-id"
+)
+
+// TemporaryOrderRequest is the body of the cart the web saves before it sends
+// the customer to pay. A nil ScheduleMode is sent as null.
+type TemporaryOrderRequest struct {
+	ScheduleMode   *string `json:"scheduleMode" toml:"scheduleMode"`
+	AgencyCode     string  `json:"agencyCode" toml:"agencyCode"`
+	UserGigyaUID   string  `json:"userGigyaUid" toml:"userGigyaUid"`
+	Address        Address `json:"address" toml:"address"`
+	MaterialID     string  `json:"materialId" toml:"materialId"`
+	Quantity       int     `json:"quantity" toml:"quantity"`
+	UnitPrice      float64 `json:"unitPrice" toml:"unitPrice"`
+	Bill           bool    `json:"bill" toml:"bill"`
+	Discount       int     `json:"discount" toml:"discount"`
+	Tip            float64 `json:"tip" toml:"tip"`
+	DeliveryDateID string  `json:"deliveryDateId" toml:"deliveryDateId"`
+	DeliveryDate   string  `json:"deliveryDate" toml:"deliveryDate"`
+}
+
+// TemporaryOrder is the saved cart. PaymentID names the payment the cart is
+// waiting for; it is the key of every later call of the flow.
+type TemporaryOrder struct {
+	PaymentID string `json:"paymentId" toml:"paymentId"`
+}
+
+// wayletURLRequest is the body of the Waylet URL request.
+type wayletURLRequest struct {
+	PaymentID string `json:"paymentId"`
+}
+
+// wayletURLResponse is the answer to the Waylet URL request.
+type wayletURLResponse struct {
+	RedirectionURL string `json:"wayletRedirectionPaymentUrl"`
+}
+
+// PaymentOrder is the order a payment produced. The API answers it only once
+// the payment went through, so its presence is the confirmation. Only the
+// fields the CLI reports are decoded.
+type PaymentOrder struct {
+	ExternalID   FlexNumber   `json:"externalId" toml:"externalId"`
+	DeliveryDate string       `json:"deliveryDate" toml:"deliveryDate"`
+	Agency       PlacedAgency `json:"agency" toml:"agency"`
+}
+
+// CreateTemporaryOrder saves the cart that a payment will turn into an order.
+// It is authenticated and never retried, but it places nothing: no order exists
+// until the payment link is paid. Its failures keep their own category.
+// UserGigyaUID is filled from the signature.
+func (c *Client) CreateTemporaryOrder(ctx context.Context, r TemporaryOrderRequest) (TemporaryOrder, error) {
+	const endpoint = temporaryOrderPath
+	auth, err := c.sign(ctx)
+	if err != nil {
+		return TemporaryOrder{}, err
+	}
+	r.UserGigyaUID = auth.UID
+	header := authHeaders(auth)
+	addTelemetry(header, c.Telemetry, endpoint)
+	resp, err := doWrite(ctx, c.HTTP, c.BaseURL, endpoint, header, r)
+	if err != nil {
+		return TemporaryOrder{}, err
+	}
+	temp, err := decodeBody[TemporaryOrder](resp, endpoint)
+	if err != nil {
+		return TemporaryOrder{}, err
+	}
+	if temp.PaymentID == "" {
+		return TemporaryOrder{}, apiError(apperr.APIChanged, "unexpected_response",
+			"the cart answer carries no payment id", resp, endpoint)
+	}
+	return temp, nil
+}
+
+// WayletURL asks for the Waylet page that pays one temporary order. It is
+// authenticated and never retried. The URL must be an https URL: the CLI hands
+// it to the owner to open, so anything else is refused as a changed API.
+func (c *Client) WayletURL(ctx context.Context, paymentID string) (string, error) {
+	const endpoint = wayletURLPath
+	auth, err := c.sign(ctx)
+	if err != nil {
+		return "", err
+	}
+	header := authHeaders(auth)
+	addTelemetry(header, c.Telemetry, endpoint)
+	resp, err := doWrite(ctx, c.HTTP, c.BaseURL, endpoint, header, wayletURLRequest{PaymentID: paymentID})
+	if err != nil {
+		return "", err
+	}
+	out, err := decodeBody[wayletURLResponse](resp, endpoint)
+	if err != nil {
+		return "", err
+	}
+	if u, err := url.Parse(out.RedirectionURL); err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", apiError(apperr.APIChanged, "unexpected_response",
+			"the Waylet answer carries no https payment URL", resp, endpoint)
+	}
+	return out.RedirectionURL, nil
+}
+
+// OrderByPaymentID looks up the order a payment produced. It is a safe read.
+// found is false while the payment is not confirmed: the web treats any failure
+// of this call as "not yet" and asks again, and the CLI does the same for a 404,
+// a null body and an empty object. Every other failure is reported.
+func (c *Client) OrderByPaymentID(ctx context.Context, paymentID string) (PaymentOrder, bool, error) {
+	const endpoint = orderByPaymentPath
+	auth, err := c.sign(ctx)
+	if err != nil {
+		return PaymentOrder{}, false, err
+	}
+	resp, err := c.signedGET(ctx, auth, endpoint, param("paymentId", paymentID))
+	if err != nil {
+		var typed *apperr.Error
+		if errors.As(err, &typed) && typed.HTTPStatus == http.StatusNotFound {
+			return PaymentOrder{}, false, nil
+		}
+		return PaymentOrder{}, false, err
+	}
+	body := bytes.TrimSpace(resp.Body)
+	if len(body) == 0 || string(body) == "null" || string(body) == "{}" {
+		return PaymentOrder{}, false, nil
+	}
+	order, err := decodeBody[PaymentOrder](resp, endpoint)
+	if err != nil {
+		return PaymentOrder{}, false, err
+	}
+	return order, true, nil
+}
