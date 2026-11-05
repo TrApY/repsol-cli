@@ -12,9 +12,12 @@ import (
 // colours, so NO_COLOR holds without any code.
 func (r OrderResult) PrettyPrint(w io.Writer) error {
 	var b bytes.Buffer
-	if r.DryRun {
+	switch {
+	case r.DryRun:
 		b.WriteString("dry run: no order was placed\n")
-	} else {
+	case r.PaymentStatus == paymentAwaiting:
+		b.WriteString("payment started: the order is placed when the payment is confirmed\n")
+	default:
 		fmt.Fprintf(&b, "order %s\n", r.ID)
 	}
 	fmt.Fprintf(&b, "order type: %s\n", r.OrderType)
@@ -40,8 +43,41 @@ func (r OrderResult) PrettyPrint(w io.Writer) error {
 		fmt.Fprintf(&b, "agency phone: %s\n", r.Agency.Phone)
 	}
 	fmt.Fprintf(&b, "payment: %s\n", strings.ReplaceAll(r.Payment, "_", " "))
+	if r.PaymentStatus != "" {
+		fmt.Fprintf(&b, "payment status: %s\n", strings.ReplaceAll(r.PaymentStatus, "_", " "))
+	}
+	if r.PaymentID != "" {
+		fmt.Fprintf(&b, "payment id: %s\n", r.PaymentID)
+	}
+	if r.PaymentURL != "" && r.PaymentStatus == paymentAwaiting {
+		fmt.Fprintf(&b, "pay here: %s\n", r.PaymentURL)
+	}
 	if r.Note != "" {
 		fmt.Fprintf(&b, "note: %s\n", r.Note)
+	}
+	_, err := w.Write(b.Bytes())
+	return err
+}
+
+// PrettyPrint writes the payment state as human-readable text. It uses no ANSI
+// colours, so NO_COLOR holds without any code.
+func (v PaymentView) PrettyPrint(w io.Writer) error {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "payment id: %s\n", v.PaymentID)
+	fmt.Fprintf(&b, "payment status: %s\n", strings.ReplaceAll(v.Status, "_", " "))
+	if v.ID != "" {
+		fmt.Fprintf(&b, "order: %s\n", v.ID)
+	}
+	if v.DeliveryDate != "" {
+		fmt.Fprintf(&b, "delivery: %s\n", v.DeliveryDate)
+	}
+	if v.Agency != nil {
+		if v.Agency.Name != "" {
+			fmt.Fprintf(&b, "agency: %s\n", v.Agency.Name)
+		}
+		if v.Agency.Phone != "" {
+			fmt.Fprintf(&b, "agency phone: %s\n", v.Agency.Phone)
+		}
 	}
 	_, err := w.Write(b.Bytes())
 	return err

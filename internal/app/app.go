@@ -4,6 +4,7 @@
 package app
 
 import (
+	"context"
 	"time"
 
 	"github.com/felipe9962/repsol-cli/internal/config"
@@ -41,8 +42,11 @@ type Deps struct {
 	// Env carries the REPSOL_* environment values.
 	Env Env
 	// Now returns the current time. It is the clock the signature cache ages
-	// against.
+	// against, and the one a payment wait counts its deadline on.
 	Now func() time.Time
+	// Sleep pauses between two lookups of a payment wait. It returns early
+	// with the context's error when the context ends. It defaults to a timer.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 // App is the entry point of every use case. Create it with New.
@@ -54,6 +58,7 @@ type App struct {
 	profile string
 	env     Env
 	now     func() time.Time
+	sleep   func(ctx context.Context, d time.Duration) error
 	session *Session
 }
 
@@ -62,6 +67,10 @@ func New(d Deps) *App {
 	now := d.Now
 	if now == nil {
 		now = time.Now
+	}
+	sleep := d.Sleep
+	if sleep == nil {
+		sleep = sleepContext
 	}
 	profile := d.Profile
 	if profile == "" {
@@ -76,6 +85,7 @@ func New(d Deps) *App {
 		profile: profile,
 		env:     d.Env,
 		now:     now,
+		sleep:   sleep,
 	}
 	a.session = &Session{app: a}
 	if a.api != nil {
@@ -127,4 +137,16 @@ func (a *App) ensureDefaultProfile() error {
 		}
 		return nil
 	})
+}
+
+// sleepContext waits for d, or returns the context's error when it ends first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

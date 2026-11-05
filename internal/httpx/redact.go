@@ -65,6 +65,10 @@ var sensitiveKeys = map[string]struct{}{
 	"uidsig":           {},
 	"loginprovideruid": {},
 	"provideruid":      {},
+	// The Waylet payment: its id is the key of the order it pays, and its page
+	// URL opens that payment.
+	"paymentid":                   {},
+	"wayletredirectionpaymenturl": {},
 	// The town and street codes of the delivery address. The address and
 	// agency objects are dropped whole, so their partial history copies go too.
 	"address":          {},

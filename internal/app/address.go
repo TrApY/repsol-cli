@@ -170,16 +170,26 @@ func (a *App) loadAddress() (repsolapi.Address, error) {
 // currentAgency resolves the agency that serves addr. An empty agency code
 // means Repsol does not deliver there.
 func (a *App) currentAgency(ctx context.Context, addr repsolapi.Address) (string, error) {
-	info, err := a.api.Agency(ctx, addr)
+	info, err := a.agencyInfo(ctx, addr)
 	if err != nil {
 		return "", err
 	}
+	return info.AgencyCode, nil
+}
+
+// agencyInfo resolves the agency that serves addr with the payment methods it
+// accepts. An empty agency code means Repsol does not deliver there.
+func (a *App) agencyInfo(ctx context.Context, addr repsolapi.Address) (repsolapi.AgencyInfo, error) {
+	info, err := a.api.Agency(ctx, addr)
+	if err != nil {
+		return repsolapi.AgencyInfo{}, err
+	}
 	if info.AgencyCode == "" {
-		return "", apperr.New(apperr.Refused, "no_delivery",
+		return repsolapi.AgencyInfo{}, apperr.New(apperr.Refused, "no_delivery",
 			"no agency delivers to this address").
 			WithHint("check the address with \"repsol address show\"")
 	}
-	return info.AgencyCode, nil
+	return info, nil
 }
 
 // addressView renders a stored address for output.
