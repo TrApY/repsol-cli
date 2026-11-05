@@ -505,3 +505,23 @@ func TestCheckCartNotRetried(t *testing.T) {
 		t.Errorf("server saw %d requests, want exactly 1", got)
 	}
 }
+
+func TestCartCheckDecodesTheOnlinePaymentFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSONBody(w, []byte(`{"status":"EE04","order":true,"orderType":"ORDER",`+
+			`"billable":true,"blockedPolicy":true,"isCalendarDeliveryWithoutDate":true,"inspectionExpired":true}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: testHTTP(t, srv), Signer: stubSigner{}, Telemetry: NewTelemetry()}
+
+	check, err := c.CheckCart(context.Background(), CartCheckRequest{
+		AgencyCode: "0000000001", Address: testAddress(), MaterialID: "153", Quantity: 1,
+		UnitPrice: 18.89, DeliveryDateID: "1", DeliveryDate: "2026-11-05",
+	})
+	if err != nil {
+		t.Fatalf("CheckCart: %v", err)
+	}
+	if !check.Billable || !check.BlockedPolicy || !check.IsCalendarDeliveryWithoutDate || !check.InspectionExpired {
+		t.Errorf("CartCheck = %#v, want the four online-payment fields decoded", check)
+	}
+}

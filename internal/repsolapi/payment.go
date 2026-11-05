@@ -51,12 +51,22 @@ type wayletURLResponse struct {
 }
 
 // PaymentOrder is the order a payment produced. The API answers it only once
-// the payment went through, so its presence is the confirmation. Only the
-// fields the CLI reports are decoded.
+// the payment went through, and the web fails on an answer without an external
+// id, an agency or an address, so those three together are the confirmation
+// (see Confirmed). Only the fields the CLI reports are decoded; the address and
+// the agency are kept as pointers to tell an absent object from an empty one.
 type PaymentOrder struct {
-	ExternalID   FlexNumber   `json:"externalId" toml:"externalId"`
-	DeliveryDate string       `json:"deliveryDate" toml:"deliveryDate"`
-	Agency       PlacedAgency `json:"agency" toml:"agency"`
+	ExternalID   FlexNumber     `json:"externalId" toml:"externalId"`
+	DeliveryDate string         `json:"deliveryDate" toml:"deliveryDate"`
+	Address      *PlacedAddress `json:"address" toml:"address"`
+	Agency       *PlacedAgency  `json:"agency" toml:"agency"`
+}
+
+// Confirmed reports whether the answer is the order of a paid payment: it
+// carries an external id and the agency and address objects the web needs to
+// show the order. Any other non-empty object is not a confirmation.
+func (o PaymentOrder) Confirmed() bool {
+	return o.ExternalID != "" && o.Agency != nil && o.Address != nil
 }
 
 // CreateTemporaryOrder saves the cart that a payment will turn into an order.
@@ -113,20 +123,34 @@ func (c *Client) WayletURL(ctx context.Context, paymentID string) (string, error
 	return out.RedirectionURL, nil
 }
 
-// OrderByPaymentID looks up the order a payment produced. It is a safe read.
-// found is false while the payment is not confirmed: the web treats any failure
-// of this call as "not yet" and asks again, and the CLI does the same for a 404,
-// a null body and an empty object. Every other failure is reported.
+// OrderByPaymentID looks up the order a payment produced. It is a safe read
+// and keeps the read retries. found is false while the payment is not
+// confirmed: the web treats any failure of this call as "not yet" and asks
+// again, and the CLI does the same for a 404 and every other 4xx but an
+// authentication failure (401, 403), for the error envelope the API sends with
+// HTTP 200, and for a null body, an empty object or an answer that is not a
+// confirmation (see PaymentOrder.Confirmed). Every other failure is reported.
 func (c *Client) OrderByPaymentID(ctx context.Context, paymentID string) (PaymentOrder, bool, error) {
+	return c.lookupPayment(ctx, paymentID, true)
+}
+
+// PollOrderByPaymentID is OrderByPaymentID for a payment wait: it sends one
+// request and never retries, because the wait loop is the retry and has its own
+// deadline, which three attempts of the transport timeout would overrun.
+func (c *Client) PollOrderByPaymentID(ctx context.Context, paymentID string) (PaymentOrder, bool, error) {
+	return c.lookupPayment(ctx, paymentID, false)
+}
+
+// lookupPayment is the lookup behind OrderByPaymentID and PollOrderByPaymentID.
+func (c *Client) lookupPayment(ctx context.Context, paymentID string, retry bool) (PaymentOrder, bool, error) {
 	const endpoint = orderByPaymentPath
 	auth, err := c.sign(ctx)
 	if err != nil {
 		return PaymentOrder{}, false, err
 	}
-	resp, err := c.signedGET(ctx, auth, endpoint, param("paymentId", paymentID))
+	resp, err := c.signedRead(ctx, auth, endpoint, retry, param("paymentId", paymentID))
 	if err != nil {
-		var typed *apperr.Error
-		if errors.As(err, &typed) && typed.HTTPStatus == http.StatusNotFound {
+		if notYet(err) {
 			return PaymentOrder{}, false, nil
 		}
 		return PaymentOrder{}, false, err
@@ -137,7 +161,32 @@ func (c *Client) OrderByPaymentID(ctx context.Context, paymentID string) (Paymen
 	}
 	order, err := decodeBody[PaymentOrder](resp, endpoint)
 	if err != nil {
+		if notYet(err) {
+			return PaymentOrder{}, false, nil
+		}
 		return PaymentOrder{}, false, err
 	}
+	if !order.Confirmed() {
+		return PaymentOrder{}, false, nil
+	}
 	return order, true, nil
+}
+
+// notYet reports whether a failure of the payment lookup means "the payment is
+// not confirmed yet": a 4xx that is no authentication failure, or the error
+// envelope of a 200 answer. A 401 or 403 is a real failure, and so is a
+// transport or server failure, which the caller handles on its own.
+func notYet(err error) bool {
+	var typed *apperr.Error
+	if !errors.As(err, &typed) {
+		return false
+	}
+	switch {
+	case typed.Code == "api_error":
+		return true
+	case typed.HTTPStatus == http.StatusUnauthorized, typed.HTTPStatus == http.StatusForbidden:
+		return false
+	default:
+		return typed.HTTPStatus >= 400 && typed.HTTPStatus < 500
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/felipe9962/repsol-cli/internal/apperr"
 )
@@ -179,6 +180,12 @@ func TestWayletResponsesAreValidated(t *testing.T) {
 	}
 }
 
+// confirmedBody is the lookup answer of a paid payment, with the fields the web
+// needs.
+const confirmedBody = `{"externalId":800000000000000009,"deliveryDate":"2026-11-05",` +
+	`"address":{"street":"Calle Falsa","number":"1"},` +
+	`"agency":{"name":"Agencia Test","phone":"900 000 000","agencyCode":"0000000001"}}`
+
 func TestOrderByPaymentID(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -191,7 +198,7 @@ func TestOrderByPaymentID(t *testing.T) {
 		{
 			name:      "confirmed",
 			status:    http.StatusOK,
-			body:      `{"externalId":800000000000000009,"deliveryDate":"2026-11-05","agency":{"name":"Agencia Test","phone":"900 000 000","agencyCode":"0000000001"}}`,
+			body:      confirmedBody,
 			wantFound: true,
 			wantID:    "800000000000000009",
 			wantDate:  "2026-11-05",
@@ -200,6 +207,27 @@ func TestOrderByPaymentID(t *testing.T) {
 		{name: "null_body", status: http.StatusOK, body: `null`},
 		{name: "empty_body", status: http.StatusOK, body: ``},
 		{name: "empty_object", status: http.StatusOK, body: `{}`},
+		// The web reads the externalId, the agency and the address of the
+		// answer, and fails without them; a body that lacks one is not a
+		// confirmation.
+		{name: "no_external_id", status: http.StatusOK,
+			body: `{"deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`},
+		{name: "empty_external_id", status: http.StatusOK,
+			body: `{"externalId":"","deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`},
+		{name: "null_external_id", status: http.StatusOK,
+			body: `{"externalId":null,"deliveryDate":"2026-11-05","address":{"street":"x"},"agency":{"name":"A"}}`},
+		{name: "no_agency", status: http.StatusOK,
+			body: `{"externalId":8,"deliveryDate":"2026-11-05","address":{"street":"x"}}`},
+		{name: "no_address", status: http.StatusOK,
+			body: `{"externalId":8,"deliveryDate":"2026-11-05","agency":{"name":"A"}}`},
+		// Any other failure of the lookup that is not an authentication
+		// failure means "not yet" for the web, and so for the CLI.
+		{name: "bad_request_yet", status: http.StatusBadRequest},
+		{name: "conflict_yet", status: http.StatusConflict},
+		{name: "unprocessable_yet", status: http.StatusUnprocessableEntity},
+		{name: "too_many_requests_yet", status: http.StatusTooManyRequests},
+		{name: "error_envelope_yet", status: http.StatusOK,
+			body: `{"error":true,"message":"payment not found","errorCode":"PTB-404"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,16 +269,59 @@ func TestOrderByPaymentID(t *testing.T) {
 }
 
 func TestOrderByPaymentIDReportsRealFailures(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		want   apperr.Category
+	}{
+		{"unauthorized", http.StatusUnauthorized, apperr.Auth},
+		{"forbidden", http.StatusForbidden, apperr.Blocked},
+		{"server_error", http.StatusInternalServerError, apperr.Network},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+			c := &Client{BaseURL: srv.URL, HTTP: testHTTP(t, srv), Signer: stubSigner{}}
+			_, found, err := c.OrderByPaymentID(context.Background(), "p")
+			if found {
+				t.Errorf("found = true on a %d", tc.status)
+			}
+			if got := apperr.From(err).Category; got != tc.want {
+				t.Errorf("category = %s, want %s (err: %v)", got, tc.want, err)
+			}
+		})
+	}
+}
+
+func TestPollOrderByPaymentIDDoesNotRetry(t *testing.T) {
+	var polls, lookups capture
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
+		if r.URL.Query().Get("paymentId") == "poll" {
+			polls.record(r)
+		} else {
+			lookups.record(r)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	c := &Client{BaseURL: srv.URL, HTTP: testHTTP(t, srv), Signer: stubSigner{}}
-	_, found, err := c.OrderByPaymentID(context.Background(), "p")
-	if found {
-		t.Error("found = true on a 401")
+	h := testHTTP(t, srv)
+	h.Backoff = func(int) time.Duration { return 0 }
+	c := &Client{BaseURL: srv.URL, HTTP: h, Signer: stubSigner{}}
+
+	// The wait loop is the retry of a payment wait, so one poll is one request.
+	_, _, err := c.PollOrderByPaymentID(context.Background(), "poll")
+	requireAppError(t, err, apperr.Network, "server_error")
+	if got := len(polls.all()); got != 1 {
+		t.Errorf("a poll sent %d requests, want exactly 1", got)
 	}
-	if got := apperr.From(err).Category; got != apperr.Auth {
-		t.Errorf("category = %s, want auth (err: %v)", got, err)
+
+	// The plain lookup keeps the read retries.
+	_, _, err = c.OrderByPaymentID(context.Background(), "lookup")
+	requireAppError(t, err, apperr.Network, "server_error")
+	if got := len(lookups.all()); got != 3 {
+		t.Errorf("a lookup sent %d requests, want its 3 attempts", got)
 	}
 }

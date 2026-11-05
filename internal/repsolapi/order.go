@@ -30,12 +30,26 @@ type CartCheckRequest struct {
 }
 
 // CartCheck is the cart validation result. It says which write follows: a
-// solicitude when OrderType is SOLICITUDE, an order when Order is true.
+// solicitude when OrderType is SOLICITUDE, an order when Order is true. The
+// last four fields are the ones the web reads, besides the order flag, to decide
+// whether it offers an online payment.
 type CartCheck struct {
 	Status       string `json:"status" toml:"status"`
 	OnlinePolicy bool   `json:"onlinePolicy" toml:"onlinePolicy"`
 	Order        bool   `json:"order" toml:"order"`
 	OrderType    string `json:"orderType" toml:"orderType"`
+	// Billable is true for a customer that has to be billed; the web offers no
+	// online payment then.
+	Billable bool `json:"billable" toml:"billable"`
+	// BlockedPolicy is true when the order policy blocks the customer; the web
+	// offers no online payment then.
+	BlockedPolicy bool `json:"blockedPolicy" toml:"blockedPolicy"`
+	// IsCalendarDeliveryWithoutDate is true when the product has a calendar
+	// but no delivery date was chosen; the web offers no online payment then.
+	IsCalendarDeliveryWithoutDate bool `json:"isCalendarDeliveryWithoutDate" toml:"isCalendarDeliveryWithoutDate"`
+	// InspectionExpired is true when the installation inspection has expired;
+	// the web only lets the customer pay on delivery then.
+	InspectionExpired bool `json:"inspectionExpired" toml:"inspectionExpired"`
 }
 
 // SolicitudeRequest is the body of a pay-on-delivery order request. Status is
