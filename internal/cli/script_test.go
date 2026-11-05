@@ -72,7 +72,7 @@ func cmdFake(ts *testscript.TestScript, neg bool, args []string) {
 		ts.Fatalf("fake does not support !")
 	}
 	if len(args) == 0 {
-		ts.Fatalf("usage: fake count PATH N | fake fail PATH STATUS | fake check online-policy|order|solicitude | fake waylet on|off|pay-after N|pay ID | fake reject-token TOKEN")
+		ts.Fatalf("usage: fake count PATH N | fake fail PATH STATUS | fake drop PATH | fake check online-policy|order|solicitude|order-billable | fake waylet on|off|pay-after N|pay ID | fake reject-token TOKEN")
 	}
 
 	srv := fakeServer(ts)
@@ -93,9 +93,14 @@ func cmdFake(ts *testscript.TestScript, neg bool, args []string) {
 		status, err := strconv.Atoi(args[2])
 		ts.Check(err)
 		srv.FailNext(args[1], status)
+	case "drop":
+		if len(args) != 2 {
+			ts.Fatalf("usage: fake drop PATH")
+		}
+		srv.DropNext(args[1])
 	case "check":
 		if len(args) != 2 {
-			ts.Fatalf("usage: fake check online-policy|order|solicitude")
+			ts.Fatalf("usage: fake check online-policy|order|solicitude|order-billable")
 		}
 		switch args[1] {
 		case "online-policy":
@@ -104,6 +109,8 @@ func cmdFake(ts *testscript.TestScript, neg bool, args []string) {
 			srv.SetCheck(repsolapi.CartCheck{Status: "EE04", Order: true, OrderType: "ORDER"})
 		case "solicitude":
 			srv.SetCheck(repsolapi.CartCheck{Status: "EE04", OrderType: "SOLICITUDE"})
+		case "order-billable":
+			srv.SetCheck(repsolapi.CartCheck{Status: "EE04", Order: true, OrderType: "ORDER", Billable: true})
 		default:
 			ts.Fatalf("fake check: unknown outcome %q", args[1])
 		}

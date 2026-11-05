@@ -1,0 +1,24 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+
+# The debug log of a real payment flow records every request and redacts the
+# payment id and the payment page URL, in the query and in the response.
+exec repsol --debug order create --pay waylet
+stdout '"payment_id": "fake-payment-1"'
+stdout '"payment_url": "https://waylet.example.test/pay'
+stderr 'url=http://[^ ]*/api/cart status=200'
+stderr 'request_body="\{\\"paymentId\\":\\"REDACTED\\"\}"'
+stderr 'response_body="\{\\"paymentId\\":\\"REDACTED\\"\}"'
+stderr 'response_body="\{\\"wayletRedirectionPaymentUrl\\":\\"REDACTED\\"\}"'
+! stderr 'fake-payment-1'
+! stderr 'waylet.example.test'
+
+fake waylet pay fake-payment-1
+exec repsol --debug order payment fake-payment-1
+stdout '"payment_status": "confirmed"'
+stderr 'order-history/payment-id'
+stderr 'paymentId=REDACTED'
+! stderr 'fake-payment-1'
+! stderr 'waylet.example.test'

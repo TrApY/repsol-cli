@@ -1,0 +1,30 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+
+# The connection drops after the payment page request was sent: the payment may
+# exist. Nothing was charged, but the command must not call it "not started"
+# and must not invite a retry.
+fake drop /api/waylet-payment/url
+! exec repsol --error-format json order create --pay waylet
+stderr '"code":"payment_outcome_unknown"'
+stderr '"exit_code":9'
+stderr '"retryable":false'
+stderr 'nothing has been charged'
+stderr 'may have been created'
+stderr 'repsol order payment fake-payment-1'
+! stderr 'no payment was started'
+fake count /api/cart 1
+fake count /api/waylet-payment/url 1
+
+# The payment is remembered, so the next order is held back.
+! exec repsol --error-format json order create --pay waylet
+stderr '"code":"payment_pending"'
+fake count /api/cart 1
+
+# A server error is just as unknown.
+exec repsol order create --pay waylet --force
+fake fail /api/waylet-payment/url 502
+! exec repsol --error-format json order create --pay waylet --force
+stderr '"code":"payment_outcome_unknown"'
