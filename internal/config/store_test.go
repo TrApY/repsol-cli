@@ -437,3 +437,43 @@ func TestLogoutKeepsThePendingPayment(t *testing.T) {
 		t.Error("deleting the credentials dropped the pending payment")
 	}
 }
+
+func TestDiscardPendingPayment(t *testing.T) {
+	s := newStore(t)
+	if err := s.DiscardPendingPayment("default"); err != nil {
+		t.Fatalf("DiscardPendingPayment with nothing remembered: %v", err)
+	}
+
+	// A readable payment goes, whatever its id.
+	if err := s.SavePendingPayment("default", PendingPayment{PaymentID: "p-1"}); err != nil {
+		t.Fatalf("SavePendingPayment: %v", err)
+	}
+	if err := s.DiscardPendingPayment("default"); err != nil {
+		t.Fatalf("DiscardPendingPayment: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); found {
+		t.Error("the payment is still remembered")
+	}
+
+	// So does a file that cannot be read, which is what the call is for.
+	path, err := s.pendingPath("default")
+	if err != nil {
+		t.Fatalf("pendingPath: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("[[not toml"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, _, err := s.LoadPendingPayment("default"); err == nil {
+		t.Fatal("LoadPendingPayment of a damaged file succeeded")
+	}
+	if err := s.DiscardPendingPayment("default"); err != nil {
+		t.Fatalf("DiscardPendingPayment of a damaged file: %v", err)
+	}
+	if _, found, err := s.LoadPendingPayment("default"); err != nil || found {
+		t.Errorf("after the discard: found %v, err %v; want neither", found, err)
+	}
+
+	if err := s.DiscardPendingPayment("Bad Name"); err == nil {
+		t.Error("DiscardPendingPayment accepted an invalid profile name")
+	}
+}

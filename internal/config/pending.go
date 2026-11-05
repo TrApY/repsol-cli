@@ -108,3 +108,24 @@ func (s Store) ClearPendingPayment(profile, paymentID string) error {
 	}
 	return nil
 }
+
+// DiscardPendingPayment drops whatever the profile remembers about a payment,
+// without reading it first. It is the way out of a state file that can no longer
+// be read: ClearPendingPayment has to load the file to compare ids, and fails on
+// it.
+func (s Store) DiscardPendingPayment(profile string) error {
+	path, err := s.pendingPath(profile)
+	if err != nil {
+		return err
+	}
+	release, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return writeFailed(path, err)
+	}
+	return nil
+}

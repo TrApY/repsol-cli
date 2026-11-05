@@ -16,10 +16,17 @@ import (
 // confirmed. It is the cadence of the web's own payment callback page.
 const PaymentPollInterval = 7 * time.Second
 
+// PaymentStateTTL is how long the profile remembers an unpaid payment before
+// the next order looks it up one last time and, when it still is not paid,
+// forgets it. A link nobody pays within a day is not going to be paid, and
+// remembering it for good would block ordering forever.
+const PaymentStateTTL = 24 * time.Hour
+
 // The states of a Waylet payment.
 const (
 	paymentAwaiting  = "awaiting_payment"
 	paymentConfirmed = "confirmed"
+	paymentAbandoned = "abandoned"
 )
 
 // PaymentLink is the Waylet page that pays one order, and the payment it
@@ -34,9 +41,10 @@ type PaymentLink struct {
 // PaymentView is the state of one Waylet payment, as "repsol order payment"
 // prints it.
 type PaymentView struct {
-	// PaymentID names the payment.
-	PaymentID string `json:"payment_id"`
-	// Status is "awaiting_payment" or "confirmed".
+	// PaymentID names the payment. It is empty when a damaged state file was
+	// removed and no id could be read from it.
+	PaymentID string `json:"payment_id,omitempty"`
+	// Status is "awaiting_payment", "confirmed" or "abandoned".
 	Status string `json:"payment_status"`
 	// ID is the external id of the order the payment produced. It is empty
 	// until the payment is confirmed.
@@ -46,6 +54,9 @@ type PaymentView struct {
 	// Agency is the agency that will deliver the order, once the payment is
 	// confirmed.
 	Agency *AgencyView `json:"agency,omitempty"`
+	// Note is a caveat for the owner, set when a payment was abandoned without
+	// knowing whether it was paid, or after it was.
+	Note string `json:"note,omitempty"`
 }
 
 // startWayletPayment starts the Waylet payment of a planned order: it saves the
@@ -201,43 +212,118 @@ func (a *App) settlePaid(paymentID string, order repsolapi.PaymentOrder) {
 }
 
 // ensurePaymentResolved refuses an order while the profile has a Waylet payment
-// that can still produce a delivery. It asks Repsol first:
+// that can still produce a delivery. It asks Repsol first, whatever --force says:
+// --force is about the order history, and a payment link may have been paid
+// since. It never guesses the session: an authentication failure is reported as
+// it is. What it did to the remembered payment on its own is returned as
+// notices for the order result.
 //
 //   - a payment that was paid and whose delivery is today or later refuses the
 //     order with pending_order, naming the order and its date, without looking
 //     at the history: the history may not list it yet, or not for this agency
-//     and locality. The payment stays remembered. A paid payment whose delivery
-//     is behind us is forgotten (unless this is a dry run, which writes
+//     and locality. The payment stays remembered, and nothing but its own
+//     "repsol order payment ID --abandon" lets go of it. A paid payment whose
+//     delivery is behind us is forgotten (unless this is a dry run, which writes
 //     nothing) and the order goes on to the history guard;
 //   - a payment that is not paid, or whose lookup failed, refuses the order,
 //     and the two are told apart: the first is payment_pending, the second
-//     payment_check_failed, "could not check".
-//
-// It never guesses the session: an authentication failure is reported as it is.
-func (a *App) ensurePaymentResolved(ctx context.Context, dryRun bool) error {
+//     payment_check_failed, "could not check". It is forgotten, with a notice,
+//     when the order says AbandonPayment, and also when it is more than
+//     PaymentStateTTL old and the lookup said conclusively that it is not paid;
+//   - a state file that cannot be read refuses the order with
+//     payment_state_invalid, unless the order says AbandonPayment.
+func (a *App) ensurePaymentResolved(ctx context.Context, in PlaceOrderInput) ([]string, error) {
 	pending, found, err := a.store.LoadPendingPayment(a.profile)
 	if err != nil {
-		return err
+		if !unreadablePaymentState(err) {
+			return nil, err
+		}
+		if !in.AbandonPayment {
+			return nil, paymentStateInvalid(err)
+		}
+		if !in.DryRun {
+			if err := a.store.DiscardPendingPayment(a.profile); err != nil {
+				return nil, err
+			}
+		}
+		return []string{forgetNotice(in.DryRun, "the Waylet payment state of this profile could not be read")}, nil
 	}
 	if !found {
-		return nil
+		return nil, nil
 	}
+
 	order, paid, err := a.api.OrderByPaymentID(ctx, pending.PaymentID)
 	switch {
 	case ctx.Err() != nil:
-		return err
+		if err == nil {
+			err = ctx.Err()
+		}
+		return nil, err
 	case err != nil && apperr.From(err).Category == apperr.Auth:
-		return err
+		return nil, err
 	case err == nil && paid:
 		if a.deliveryPending(order) {
-			return paidPaymentPending(order)
+			return nil, paidPaymentPending(pending, order)
 		}
-		if !dryRun {
+		if !in.DryRun {
 			a.closePayment(pending.PaymentID)
 		}
-		return nil
+		return nil, nil
 	}
-	return paymentPending(pending, err)
+
+	started := pending.StartedAt.In(madrid).Format("2006-01-02 15:04")
+	switch {
+	case in.AbandonPayment:
+		what := fmt.Sprintf("the Waylet payment started at %s was abandoned", started)
+		if err != nil {
+			what = fmt.Sprintf("the Waylet payment started at %s could not be checked and was abandoned; "+
+				"it may have been paid", started)
+		}
+		return a.forgetPayment(in.DryRun, pending.PaymentID, what)
+	case err == nil && a.now().Sub(pending.StartedAt) > PaymentStateTTL:
+		what := fmt.Sprintf("the Waylet payment started at %s was not paid within %s", started, PaymentStateTTL)
+		return a.forgetPayment(in.DryRun, pending.PaymentID, what)
+	}
+	return nil, paymentPending(pending, err)
+}
+
+// forgetPayment drops the remembered payment and returns the notice that says
+// so. A dry run writes nothing and says what would happen.
+func (a *App) forgetPayment(dryRun bool, paymentID, what string) ([]string, error) {
+	if !dryRun {
+		if err := a.store.ClearPendingPayment(a.profile, paymentID); err != nil {
+			return nil, err
+		}
+	}
+	return []string{forgetNotice(dryRun, what)}, nil
+}
+
+// forgetNotice words what happened to a remembered payment. what is a clause
+// that already says why.
+func forgetNotice(dryRun bool, what string) string {
+	if dryRun {
+		return what + "; it would be forgotten when an order is placed"
+	}
+	return what + "; it was forgotten"
+}
+
+// unreadablePaymentState reports whether loading the remembered payment failed
+// because the file is damaged, which "--abandon" can clear, as opposed to a
+// failure of the disk or of the profile name.
+func unreadablePaymentState(err error) bool {
+	return apperr.From(err).Code == "config_invalid"
+}
+
+// paymentStateInvalid is the refusal of an order while the file that remembers
+// the Waylet payment cannot be read: the CLI cannot tell whether a payment is
+// waiting, so it holds the order back, and says how to let go.
+func paymentStateInvalid(cause error) error {
+	e := apperr.New(apperr.Refused, "payment_state_invalid",
+		"the file that remembers the Waylet payment of this profile cannot be read").
+		WithHint("if no payment link is waiting, run \"repsol order payment --abandon\" to remove it, " +
+			"or add --abandon-payment to this command; check the order history first if a link may have been paid")
+	e.Err = cause
+	return e
 }
 
 // paymentPending is the refusal of an order while a payment is open. lookupErr,
@@ -249,7 +335,8 @@ func paymentPending(p config.PendingPayment, lookupErr error) error {
 		typed := apperr.From(lookupErr)
 		e := apperr.New(apperr.Refused, "payment_check_failed",
 			fmt.Sprintf("could not check whether the Waylet payment started at %s was paid", started)).
-			WithHint(fmt.Sprintf("nothing was ordered: try again, or run \"repsol order payment %s\" to check it", p.PaymentID))
+			WithHint(fmt.Sprintf("nothing was ordered: try again, or run \"repsol order payment %s\" to check it; "+
+				"pass --abandon-payment only if the owner abandoned that payment", p.PaymentID))
 		e.Err = lookupErr
 		e.Retryable = typed.Retryable
 		return e
@@ -257,19 +344,93 @@ func paymentPending(p config.PendingPayment, lookupErr error) error {
 	return apperr.New(apperr.Refused, "payment_pending",
 		fmt.Sprintf("a Waylet payment started at %s is not paid yet", started)).
 		WithHint(fmt.Sprintf("open its link and pay, then run \"repsol order payment %s --wait\"; "+
-			"pass --force only if the owner abandoned that payment and wants a new order", p.PaymentID))
+			"pass --abandon-payment only if the owner abandoned that payment and wants a new order", p.PaymentID))
 }
 
 // paidPaymentPending is the refusal of an order while a Waylet payment that was
 // paid has a delivery still to come.
-func paidPaymentPending(order repsolapi.PaymentOrder) error {
+func paidPaymentPending(p config.PendingPayment, order repsolapi.PaymentOrder) error {
 	what := "the order of a Waylet payment"
 	if order.ExternalID != "" {
 		what = fmt.Sprintf("order %s", order.ExternalID)
 	}
 	return apperr.New(apperr.Refused, "pending_order",
 		fmt.Sprintf("%s for %s was paid with Waylet and is still pending", what, order.DeliveryDate)).
-		WithHint(forceOrderHint)
+		WithHint(fmt.Sprintf("--force does not skip a paid delivery; if the owner cancelled it with the agency, "+
+			"run \"repsol order payment %s --abandon\" so the CLI stops holding orders back for it", p.PaymentID))
+}
+
+// AbandonPayment forgets the Waylet payment the profile remembers, at the
+// owner's explicit request. The id is optional: given, it must be the
+// remembered one. It looks the payment up first, only to tell the owner what it
+// found: a payment that turns out to be paid is forgotten all the same, with a
+// note that its order exists, because the owner may have cancelled that delivery
+// and has no other way to order again before its date. A lookup that fails does
+// not stop it either, except an authentication failure, which is reported as it
+// is. A state file that cannot be read is removed without a lookup. It takes the
+// order lock, so it cannot run beside an order that is waiting for this payment.
+func (a *App) AbandonPayment(ctx context.Context, paymentID string) (PaymentView, error) {
+	paymentID = strings.TrimSpace(paymentID)
+	release, err := a.lockOrder()
+	if err != nil {
+		return PaymentView{}, err
+	}
+	defer release()
+
+	pending, found, err := a.store.LoadPendingPayment(a.profile)
+	if err != nil {
+		if !unreadablePaymentState(err) {
+			return PaymentView{}, err
+		}
+		if err := a.store.DiscardPendingPayment(a.profile); err != nil {
+			return PaymentView{}, err
+		}
+		return PaymentView{PaymentID: paymentID, Status: paymentAbandoned,
+			Note: "the state file of the Waylet payment could not be read and was removed"}, nil
+	}
+	switch {
+	case !found:
+		return PaymentView{}, apperr.New(apperr.NotFound, "no_pending_payment",
+			"no Waylet payment is remembered for this profile").
+			WithHint("there is nothing to abandon; \"repsol order create\" is not held back by a payment")
+	case paymentID != "" && paymentID != pending.PaymentID:
+		return PaymentView{}, apperr.New(apperr.Refused, "payment_mismatch",
+			"the Waylet payment remembered for this profile is not the one named").
+			WithHint(fmt.Sprintf("the remembered payment is %s", pending.PaymentID))
+	}
+
+	view := PaymentView{PaymentID: pending.PaymentID, Status: paymentAbandoned}
+	order, paid, err := a.api.OrderByPaymentID(ctx, pending.PaymentID)
+	switch {
+	case ctx.Err() != nil:
+		if err == nil {
+			err = ctx.Err()
+		}
+		return PaymentView{}, err
+	case err != nil && apperr.From(err).Category == apperr.Auth:
+		return PaymentView{}, err
+	case err != nil:
+		view.Note = "the payment could not be checked, so it may have been paid; the CLI no longer holds orders back for it"
+	case paid:
+		view.ID = string(order.ExternalID)
+		view.DeliveryDate = order.DeliveryDate
+		view.Agency = agencyOf(order)
+		view.Note = "the payment was paid and its order exists; the CLI no longer holds orders back for it, " +
+			"and the order history may still list that delivery as pending"
+	}
+	if err := a.store.ClearPendingPayment(a.profile, pending.PaymentID); err != nil {
+		return PaymentView{}, err
+	}
+	return view, nil
+}
+
+// agencyOf returns the agency of a paid order as the CLI prints it, or nil when
+// the answer names none.
+func agencyOf(order repsolapi.PaymentOrder) *AgencyView {
+	if order.Agency != nil && (order.Agency.Name != "" || order.Agency.Phone != "") {
+		return &AgencyView{Name: order.Agency.Name, Phone: order.Agency.Phone}
+	}
+	return nil
 }
 
 // PaymentStatus looks up the order a Waylet payment produced. With a zero wait
@@ -311,9 +472,7 @@ func (a *App) PaymentStatus(ctx context.Context, paymentID string, wait time.Dur
 		ID:           string(order.ExternalID),
 		DeliveryDate: order.DeliveryDate,
 	}
-	if order.Agency != nil && (order.Agency.Name != "" || order.Agency.Phone != "") {
-		view.Agency = &AgencyView{Name: order.Agency.Name, Phone: order.Agency.Phone}
-	}
+	view.Agency = agencyOf(order)
 	return view, nil
 }
 
@@ -439,7 +598,7 @@ func paymentOutcomeUnknown(paymentID string, cause error) error {
 		"the Waylet payment link request failed after it was sent; "+
 			"nothing has been charged, but the payment may have been created").
 		WithHint(fmt.Sprintf("do not start another order: run \"repsol order payment %s\" to check it, "+
-			"and pass --force only if the owner wants a new payment anyway", paymentID)).
+			"and \"repsol order payment %s --abandon\" only if the owner does not want that payment", paymentID, paymentID)).
 		WithCause(cause)
 }
 

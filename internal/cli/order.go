@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/felipe9962/repsol-cli/internal/app"
+	"github.com/felipe9962/repsol-cli/internal/apperr"
 )
 
 // defaultWait is how long --wait waits when it is given without a value.
@@ -37,6 +38,7 @@ type orderCreateOptions struct {
 	wait     time.Duration
 	dryRun   bool
 	force    bool
+	abandon  bool
 }
 
 // newOrderCreateCommand builds order create.
@@ -55,7 +57,13 @@ duration needs the = form, as in --wait=30m; --wait alone waits 15 minutes.
 
 While a Waylet payment is unpaid, no other order is placed: the command exits 8
 with payment_pending until the payment is confirmed (repsol order payment ID
---wait) or --force is given.`,
+--wait) or the owner gives it up with --abandon-payment. --force does not
+replace that: it only skips the check of the order history, and the remembered
+payment is looked up all the same. A payment that was paid and whose delivery is
+still to come refuses the order with pending_order, and --abandon-payment does
+not forget it either; repsol order payment ID --abandon does. A remembered
+payment nobody paid within 24 hours is forgotten, with a notice, by the next
+order.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := state.getApp()
@@ -63,13 +71,14 @@ with payment_pending until the payment is confirmed (repsol order payment ID
 				return err
 			}
 			in := app.PlaceOrderInput{
-				Product:  opts.product,
-				Quantity: opts.quantity,
-				Date:     opts.date,
-				Pay:      opts.pay,
-				Wait:     opts.wait,
-				DryRun:   opts.dryRun,
-				Force:    opts.force,
+				Product:        opts.product,
+				Quantity:       opts.quantity,
+				Date:           opts.date,
+				Pay:            opts.pay,
+				Wait:           opts.wait,
+				DryRun:         opts.dryRun,
+				Force:          opts.force,
+				AbandonPayment: opts.abandon,
 			}
 			if opts.wait > 0 {
 				// The result only comes once the payment is confirmed, so the
@@ -100,27 +109,61 @@ with payment_pending until the payment is confirmed (repsol order payment ID
 	flags.BoolVar(&opts.dryRun, "dry-run", false,
 		"run every check and print the order without placing it")
 	flags.BoolVar(&opts.force, "force", false,
-		"place the order even when another delivery is pending or a Waylet payment is unpaid")
+		"place the order even when another delivery is pending in the history (a remembered Waylet payment is still checked)")
+	flags.BoolVar(&opts.abandon, "abandon-payment", false,
+		"forget the unpaid Waylet payment this profile remembers, or its damaged state file, and place the order")
 	return cmd
 }
 
 // newOrderPaymentCommand builds order payment.
 func newOrderPaymentCommand(state *rootState) *cobra.Command {
-	var wait time.Duration
+	var (
+		wait    time.Duration
+		abandon bool
+	)
 	cmd := &cobra.Command{
-		Use:   "payment PAYMENT_ID",
-		Short: "Check whether a Waylet payment was confirmed",
+		Use:   "payment [PAYMENT_ID]",
+		Short: "Check whether a Waylet payment was confirmed, or abandon it",
 		Long: `Look up the order a Waylet payment produced. Without --wait it asks once and
 reports awaiting_payment while the payment is not confirmed. With --wait it
 polls until the payment is confirmed or the wait ends; a duration needs the =
-form, as in --wait=30m, and --wait alone waits 15 minutes.`,
-		Args: cobra.ExactArgs(1),
+form, as in --wait=30m, and --wait alone waits 15 minutes.
+
+With --abandon it does not wait: it forgets the Waylet payment this profile
+remembers, so it stops holding other orders back. PAYMENT_ID is optional then,
+and must be the remembered payment when given. Use it only when the owner will
+not pay that link; it also removes a state file that can no longer be read. It
+looks the payment up first and says in a note when it was paid or could not be
+checked: a paid payment is forgotten all the same, because the owner may have
+cancelled that delivery.`,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if abandon {
+				return cobra.MaximumNArgs(1)(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			a, err := state.getApp()
 			if err != nil {
 				return err
 			}
-			view, err := a.PaymentStatus(cmd.Context(), args[0], wait)
+			id := ""
+			if len(args) > 0 {
+				id = args[0]
+			}
+			if abandon {
+				if wait != 0 {
+					return apperr.New(apperr.Usage, "abandon_with_wait",
+						"--abandon and --wait cannot be used together").
+						WithHint("drop --wait: abandoning a payment does not wait for it")
+				}
+				view, err := a.AbandonPayment(cmd.Context(), id)
+				if err != nil {
+					return err
+				}
+				return state.render(view)
+			}
+			view, err := a.PaymentStatus(cmd.Context(), id, wait)
 			if err != nil {
 				return err
 			}
@@ -130,6 +173,8 @@ form, as in --wait=30m, and --wait alone waits 15 minutes.`,
 	cmd.Flags().DurationVar(&wait, "wait", 0,
 		"wait for the payment to be confirmed; --wait=DURATION, default 15m")
 	cmd.Flags().Lookup("wait").NoOptDefVal = defaultWait.String()
+	cmd.Flags().BoolVar(&abandon, "abandon", false,
+		"forget the Waylet payment this profile remembers (the owner will not pay it), or its damaged state file")
 	return cmd
 }
 

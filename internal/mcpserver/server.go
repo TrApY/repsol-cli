@@ -34,8 +34,9 @@ type scheduleListIn struct {
 }
 
 // orderCreateIn is the input of order_create. There is deliberately no force
-// field: an agent must ask the owner before placing a second delivery while one
-// is pending or a Waylet payment is unpaid.
+// field, and no way to abandon a Waylet payment either: an agent must ask the
+// owner before placing a second delivery while one is pending or a Waylet
+// payment is unpaid, or could not be checked.
 type orderCreateIn struct {
 	// Product is a product alias or a numeric material id.
 	Product string `json:"product,omitempty" jsonschema:"product alias (butano, propano, ...) or numeric material id; defaults to butano"`
@@ -94,7 +95,7 @@ func NewServer(a *app.App, version string) *mcp.Server {
 			"The order is placed at once, with no confirmation. " +
 			"It fails when another delivery is still pending, a Waylet payment is still unpaid, or another order is being placed; " +
 			"report that to the owner instead of trying again. " +
-			"When the result has a note, pass it on to the owner.",
+			"When the result has a note or notices, pass them on to the owner.",
 	}, tools.orderCreate)
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "order_list",

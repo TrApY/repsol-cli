@@ -58,6 +58,9 @@ func (r OrderResult) PrettyPrint(w io.Writer) error {
 	if r.Note != "" {
 		fmt.Fprintf(&b, "note: %s\n", r.Note)
 	}
+	for _, n := range r.Notices {
+		fmt.Fprintf(&b, "notice: %s\n", n)
+	}
 	_, err := w.Write(b.Bytes())
 	return err
 }
@@ -66,7 +69,9 @@ func (r OrderResult) PrettyPrint(w io.Writer) error {
 // colours, so NO_COLOR holds without any code.
 func (v PaymentView) PrettyPrint(w io.Writer) error {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "payment id: %s\n", v.PaymentID)
+	if v.PaymentID != "" {
+		fmt.Fprintf(&b, "payment id: %s\n", v.PaymentID)
+	}
 	fmt.Fprintf(&b, "payment status: %s\n", strings.ReplaceAll(v.Status, "_", " "))
 	if v.ID != "" {
 		fmt.Fprintf(&b, "order: %s\n", v.ID)
@@ -81,6 +86,9 @@ func (v PaymentView) PrettyPrint(w io.Writer) error {
 		if v.Agency.Phone != "" {
 			fmt.Fprintf(&b, "agency phone: %s\n", v.Agency.Phone)
 		}
+	}
+	if v.Note != "" {
+		fmt.Fprintf(&b, "note: %s\n", v.Note)
 	}
 	_, err := w.Write(b.Bytes())
 	return err

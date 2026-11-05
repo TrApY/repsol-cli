@@ -24,7 +24,7 @@ stderr '"code":"payment_pending"'
 fake count /api/cart 1
 
 # A server error is just as unknown.
-exec repsol order create --pay waylet --force
+exec repsol order create --pay waylet --abandon-payment
 fake fail /api/waylet-payment/url 502
-! exec repsol --error-format json order create --pay waylet --force
+! exec repsol --error-format json order create --pay waylet --abandon-payment
 stderr '"code":"payment_outcome_unknown"'

@@ -74,8 +74,14 @@ type PlaceOrderInput struct {
 	OnPaymentLink func(PaymentLink)
 	// DryRun plans the order without writing it.
 	DryRun bool
-	// Force skips the pending-order guard.
+	// Force skips the pending-order guard, which reads the order history. It
+	// does not skip the remembered Waylet payment: that one is looked up all the
+	// same, because it may have been paid since.
 	Force bool
+	// AbandonPayment forgets the unpaid Waylet payment the profile remembers
+	// (or its damaged state file) and goes on with the order. It never forgets a
+	// payment that was paid: that delivery is still due.
+	AbandonPayment bool
 }
 
 // AgencyView is the agency of an order, as the CLI and the MCP server print it.
@@ -124,6 +130,10 @@ type OrderResult struct {
 	PaymentStatus string `json:"payment_status,omitempty"`
 	// Note is a caveat for the owner, set when OrderType is SOLICITUDE.
 	Note string `json:"note,omitempty"`
+	// Notices tell the owner what the command did to a remembered Waylet
+	// payment on its own: forgot an unpaid one that had expired or was
+	// abandoned, or removed a damaged state file.
+	Notices []string `json:"notices,omitempty"`
 }
 
 // PlaceOrder validates the input, plans the order and, unless it is a dry run,
@@ -183,10 +193,11 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 		defer release()
 	}
 
+	notices, err := a.ensurePaymentResolved(ctx, in)
+	if err != nil {
+		return OrderResult{}, err
+	}
 	if !in.Force {
-		if err := a.ensurePaymentResolved(ctx, in.DryRun); err != nil {
-			return OrderResult{}, err
-		}
 		if err := a.ensureNoPendingOrder(ctx, agencyCode, addr.LocalityCode); err != nil {
 			return OrderResult{}, err
 		}
@@ -239,6 +250,7 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 	if branch == orderTypeSolicitude {
 		result.Note = solicitudeNote
 	}
+	result.Notices = notices
 	if in.DryRun {
 		return result, nil
 	}
@@ -250,13 +262,6 @@ func (a *App) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResult, 
 	if err != nil {
 		return OrderResult{}, err
 	}
-	if in.Force {
-		// The owner chose this order over the payment that was still open, so
-		// the CLI stops holding every later order back for it. Without this an
-		// abandoned payment link would block ordering for good.
-		a.closePayment("")
-	}
-
 	result.ID = placed.ExternalID
 	if placed.DeliveryDate != "" {
 		result.DeliveryDate = placed.DeliveryDate

@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -542,7 +544,7 @@ func TestWayletSecondCreateWhileUnpaidIsRefused(t *testing.T) {
 			if typed.Category != apperr.Refused || typed.Retryable {
 				t.Errorf("category = %v retryable = %v, want a refusal that is not retryable", typed.Category, typed.Retryable)
 			}
-			for _, want := range []string{"repsol order payment " + first.PaymentID + " --wait", "--force"} {
+			for _, want := range []string{"repsol order payment " + first.PaymentID + " --wait", "--abandon-payment"} {
 				if !strings.Contains(typed.Hint, want) {
 					t.Errorf("hint %q does not mention %q", typed.Hint, want)
 				}
@@ -556,14 +558,14 @@ func TestWayletSecondCreateWhileUnpaidIsRefused(t *testing.T) {
 		})
 	}
 
-	t.Run("force starts a new payment", func(t *testing.T) {
+	t.Run("abandoning starts a new payment", func(t *testing.T) {
 		a, fake, st, _ := newWayletApp(t)
 		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
 			t.Fatalf("first order: %v", err)
 		}
-		second, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", Force: true})
+		second, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", AbandonPayment: true})
 		if err != nil {
-			t.Fatalf("order with --force: %v", err)
+			t.Fatalf("order with --abandon-payment: %v", err)
 		}
 		if second.PaymentID != "fake-payment-2" || fake.Count(pathCart) != 2 {
 			t.Errorf("payment = %q carts = %d, want a second payment", second.PaymentID, fake.Count(pathCart))
@@ -572,13 +574,13 @@ func TestWayletSecondCreateWhileUnpaidIsRefused(t *testing.T) {
 		requirePendingPayment(t, st, "fake-payment-2")
 	})
 
-	t.Run("a forced delivery order stops the tracking of the abandoned payment", func(t *testing.T) {
+	t.Run("an order that abandons the payment stops the tracking of it", func(t *testing.T) {
 		a, _, st, _ := newWayletApp(t)
 		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
 			t.Fatalf("first order: %v", err)
 		}
-		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", Force: true}); err != nil {
-			t.Fatalf("forced order: %v", err)
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", AbandonPayment: true}); err != nil {
+			t.Fatalf("order that abandons the payment: %v", err)
 		}
 		requirePendingPayment(t, st, "")
 	})
@@ -1042,7 +1044,7 @@ func TestWayletWaitRespectsTheTotalDeadline(t *testing.T) {
 	// transport timeout and its retries are longer than the whole wait.
 	for name, run := range map[string]func(a *App) error{
 		"order create --wait": func(a *App) error {
-			_, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", Wait: wait, Force: true})
+			_, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", Wait: wait})
 			return err
 		},
 		"order payment --wait": func(a *App) error {
@@ -1052,9 +1054,6 @@ func TestWayletWaitRespectsTheTotalDeadline(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, fake, _, _ := newWayletApp(t)
-			if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
-				t.Fatalf("starting a payment: %v", err)
-			}
 			a.api.HTTP.HTTP.Timeout = 3 * time.Second
 			_, release := fake.Hold(pathByPayment)
 			defer release()
@@ -1226,5 +1225,418 @@ func TestWayletWaitTimeoutKeepsTheLastLookupFailure(t *testing.T) {
 	typed := requireErrorCode(t, err, "payment_timeout")
 	if !strings.Contains(typed.Error(), "503") {
 		t.Errorf("error %q does not carry the 503 of the last failed lookup", typed.Error())
+	}
+}
+
+// payment state helpers for the tests that damage or age the remembered payment.
+func pendingFile(st config.Store) string {
+	return filepath.Join(filepath.Dir(st.Paths.Lock), "payment-"+defaultTestProfile+".toml")
+}
+
+func TestForceDoesNotSkipTheRememberedPayment(t *testing.T) {
+	ctx := context.Background()
+
+	// --force is the owner's word for a delivery that is pending in the
+	// history. It says nothing about a payment link that may have been paid
+	// since: the payment is looked up all the same.
+	t.Run("unpaid", func(t *testing.T) {
+		for _, pay := range []string{"waylet", "delivery"} {
+			a, fake, st, _ := newWayletApp(t)
+			first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+			if err != nil {
+				t.Fatalf("first order: %v", err)
+			}
+			_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: pay, Force: true})
+			requireErrorCode(t, err, "payment_pending")
+			if fake.Count(pathCart) != 1 || fake.Count(pathSolicitude) != 0 || fake.Count(pathOrder) != 0 {
+				t.Errorf("pay=%s: the forced order reached a write", pay)
+			}
+			if got := fake.Count(pathByPayment); got != 1 {
+				t.Errorf("pay=%s: %s requests = %d, want 1: --force still looks the payment up", pay, pathByPayment, got)
+			}
+			requirePendingPayment(t, st, first.PaymentID)
+		}
+	})
+
+	t.Run("paid", func(t *testing.T) {
+		for _, pay := range []string{"waylet", "delivery"} {
+			a, fake, st, _ := newWayletApp(t)
+			first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+			if err != nil {
+				t.Fatalf("first order: %v", err)
+			}
+			fake.ConfirmWaylet(first.PaymentID)
+			fake.SetHistory(nil) // the history has not caught up
+
+			_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: pay, Force: true})
+			requireErrorCode(t, err, "pending_order")
+			if fake.Count(pathCart) != 1 || fake.Count(pathSolicitude) != 0 || fake.Count(pathOrder) != 0 {
+				t.Errorf("pay=%s: the forced order reached a write", pay)
+			}
+			requirePendingPayment(t, st, first.PaymentID)
+		}
+	})
+
+	t.Run("lookup failed", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		a.api.HTTP.Attempts = 1
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.FailNext(pathByPayment, 503)
+		_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", Force: true})
+		requireErrorCode(t, err, "payment_check_failed")
+		if fake.Count(pathOrder) != 0 || fake.Count(pathSolicitude) != 0 {
+			t.Errorf("the forced order was written although the payment could not be checked")
+		}
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+
+	t.Run("force still skips the history guard", func(t *testing.T) {
+		a, fake, _, _ := newWayletApp(t)
+		fake.SetHistory([]repsolapi.HistoryEntry{pendingEntry("10000009", "2026-11-03")})
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", Force: true}); err != nil {
+			t.Fatalf("forced order over a pending delivery: %v", err)
+		}
+	})
+}
+
+func TestWayletRememberedPaymentExpires(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("still held back within a day", func(t *testing.T) {
+		a, _, _, clock, _ := newWayletAppClock(t)
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		clock.Advance(23 * time.Hour)
+		_, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"})
+		requireErrorCode(t, err, "payment_pending")
+	})
+
+	t.Run("unpaid after a day is forgotten with a notice", func(t *testing.T) {
+		a, fake, st, clock, _ := newWayletAppClock(t)
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		clock.Advance(25 * time.Hour)
+
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"})
+		if err != nil {
+			t.Fatalf("order after the payment expired: %v", err)
+		}
+		if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "forgotten") {
+			t.Errorf("notices = %q, want one saying the unpaid payment was forgotten", res.Notices)
+		}
+		if got := fake.Count(pathByPayment); got != 1 {
+			t.Errorf("%s requests = %d, want 1: one last lookup before forgetting", pathByPayment, got)
+		}
+		requirePendingPayment(t, st, "")
+	})
+
+	t.Run("a dry run does not forget it", func(t *testing.T) {
+		a, _, st, clock, _ := newWayletAppClock(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		clock.Advance(25 * time.Hour)
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", DryRun: true}); err != nil {
+			t.Fatalf("dry run after the payment expired: %v", err)
+		}
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+
+	t.Run("paid after a day is not forgotten", func(t *testing.T) {
+		a, fake, st, clock, _ := newWayletAppClock(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.ConfirmWaylet(first.PaymentID)
+		fake.SetHistory(nil)
+		clock.Advance(25 * time.Hour) // 2026-11-02: the delivery of 2026-11-04 is still due
+
+		_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"})
+		requireErrorCode(t, err, "pending_order")
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+
+	t.Run("a lookup that fails after a day keeps it", func(t *testing.T) {
+		a, fake, st, clock, _ := newWayletAppClock(t)
+		a.api.HTTP.Attempts = 1
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		clock.Advance(25 * time.Hour)
+		fake.FailNext(pathByPayment, 503)
+
+		_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"})
+		requireErrorCode(t, err, "payment_check_failed")
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+}
+
+func TestWayletUnreadablePaymentStateIsReported(t *testing.T) {
+	ctx := context.Background()
+	a, fake, st, _ := newWayletApp(t)
+	if err := os.WriteFile(pendingFile(st), []byte("this is [not toml"), 0o600); err != nil {
+		t.Fatalf("write the damaged state: %v", err)
+	}
+
+	_, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"})
+	typed := requireErrorCode(t, err, "payment_state_invalid")
+	if typed.Category != apperr.Refused {
+		t.Errorf("category = %v, want %v", typed.Category, apperr.Refused)
+	}
+	if !strings.Contains(typed.Hint, "--abandon") {
+		t.Errorf("hint %q does not say how to clear the state", typed.Hint)
+	}
+	if fake.Count(pathSolicitude) != 0 || fake.Count(pathOrder) != 0 {
+		t.Errorf("an order was written over a state that could not be read")
+	}
+}
+
+func TestWayletAbandonPaymentInOrderCreate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("an unpaid payment is forgotten and the order goes on", func(t *testing.T) {
+		for _, pay := range []string{"waylet", "delivery"} {
+			a, fake, st, _ := newWayletApp(t)
+			first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+			if err != nil {
+				t.Fatalf("first order: %v", err)
+			}
+			res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: pay, AbandonPayment: true})
+			if err != nil {
+				t.Fatalf("pay=%s: order that abandons the payment: %v", pay, err)
+			}
+			if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "forgotten") {
+				t.Errorf("pay=%s: notices = %q, want one saying the payment was forgotten", pay, res.Notices)
+			}
+			if pay == "waylet" {
+				requirePendingPayment(t, st, res.PaymentID) // the new one is tracked
+				if res.PaymentID == first.PaymentID {
+					t.Errorf("the abandoned payment was reused")
+				}
+			} else {
+				requirePendingPayment(t, st, "")
+			}
+			if got := fake.Count(pathByPayment); got != 1 {
+				t.Errorf("pay=%s: %s requests = %d, want 1: the payment is checked before it is forgotten", pay, pathByPayment, got)
+			}
+		}
+	})
+
+	t.Run("a paid payment is never forgotten this way", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.ConfirmWaylet(first.PaymentID)
+		fake.SetHistory(nil)
+		_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", AbandonPayment: true, Force: true})
+		requireErrorCode(t, err, "pending_order")
+		requirePendingPayment(t, st, first.PaymentID)
+		if fake.Count(pathOrder) != 0 || fake.Count(pathSolicitude) != 0 {
+			t.Errorf("an order was written over a paid delivery")
+		}
+	})
+
+	t.Run("a payment that could not be checked is forgotten on explicit request", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		a.api.HTTP.Attempts = 1
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.FailNext(pathByPayment, 503)
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", AbandonPayment: true})
+		if err != nil {
+			t.Fatalf("order that abandons the payment: %v", err)
+		}
+		if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "could not be checked") {
+			t.Errorf("notices = %q, want one saying the payment could not be checked", res.Notices)
+		}
+		requirePendingPayment(t, st, "")
+	})
+
+	t.Run("a dry run forgets nothing", func(t *testing.T) {
+		a, _, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", DryRun: true, AbandonPayment: true})
+		if err != nil {
+			t.Fatalf("dry run: %v", err)
+		}
+		if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "would be forgotten") {
+			t.Errorf("notices = %q, want one saying the payment would be forgotten", res.Notices)
+		}
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+}
+
+func TestAbandonPaymentCommand(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("an unpaid payment is forgotten and ordering resumes", func(t *testing.T) {
+		a, _, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		for _, id := range []string{first.PaymentID, ""} {
+			if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"}); err == nil {
+				t.Fatal("the unpaid payment did not block the order")
+			}
+			view, err := a.AbandonPayment(ctx, id)
+			if err != nil {
+				t.Fatalf("AbandonPayment(%q): %v", id, err)
+			}
+			if view.Status != "abandoned" || view.PaymentID != first.PaymentID || view.Note != "" {
+				t.Errorf("view = %+v, want the payment abandoned without a note", view)
+			}
+			requirePendingPayment(t, st, "")
+			if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", DryRun: true}); err != nil {
+				t.Errorf("ordering after the abandon: %v", err)
+			}
+			// the next round needs a payment to abandon again
+			first, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+			if err != nil {
+				t.Fatalf("new payment: %v", err)
+			}
+		}
+	})
+
+	t.Run("nothing remembered", func(t *testing.T) {
+		a, _, _, _ := newWayletApp(t)
+		_, err := a.AbandonPayment(ctx, "")
+		typed := requireErrorCode(t, err, "no_pending_payment")
+		if typed.Category != apperr.NotFound {
+			t.Errorf("category = %v, want %v", typed.Category, apperr.NotFound)
+		}
+	})
+
+	t.Run("another payment id", func(t *testing.T) {
+		a, _, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		_, err = a.AbandonPayment(ctx, "some-other-payment")
+		requireErrorCode(t, err, "payment_mismatch")
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+
+	t.Run("a paid payment is forgotten with the order it produced", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.ConfirmWaylet(first.PaymentID)
+		view, err := a.AbandonPayment(ctx, first.PaymentID)
+		if err != nil {
+			t.Fatalf("AbandonPayment: %v", err)
+		}
+		if view.Status != "abandoned" || view.ID != "800000000000000003" || view.DeliveryDate != "2026-11-04" {
+			t.Errorf("view = %+v, want the abandoned payment with the paid order", view)
+		}
+		if !strings.Contains(view.Note, "was paid") {
+			t.Errorf("note %q does not say that the payment was paid", view.Note)
+		}
+		requirePendingPayment(t, st, "")
+	})
+
+	t.Run("a lookup that fails still abandons, and says so", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		a.api.HTTP.Attempts = 1
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.FailNext(pathByPayment, 503)
+		view, err := a.AbandonPayment(ctx, first.PaymentID)
+		if err != nil {
+			t.Fatalf("AbandonPayment: %v", err)
+		}
+		if view.Status != "abandoned" || !strings.Contains(view.Note, "could not be checked") {
+			t.Errorf("view = %+v, want an abandoned payment that says it could not be checked", view)
+		}
+		requirePendingPayment(t, st, "")
+	})
+
+	t.Run("an expired session is reported", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		fake.FailNext(pathByPayment, 401)
+		_, err = a.AbandonPayment(ctx, first.PaymentID)
+		if apperr.From(err).Category != apperr.Auth {
+			t.Fatalf("error = %v, want the authentication failure", err)
+		}
+		requirePendingPayment(t, st, first.PaymentID)
+	})
+
+	t.Run("it does not run beside an order", func(t *testing.T) {
+		a, fake, st, _ := newWayletApp(t)
+		first, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("first order: %v", err)
+		}
+		release, err := a.lockOrder()
+		if err != nil {
+			t.Fatalf("lock: %v", err)
+		}
+		defer release()
+		_, err = a.AbandonPayment(ctx, first.PaymentID)
+		requireErrorCode(t, err, "order_in_progress")
+		requirePendingPayment(t, st, first.PaymentID)
+		_ = fake
+	})
+
+	t.Run("a damaged state file is removed", func(t *testing.T) {
+		a, _, st, _ := newWayletApp(t)
+		if err := os.WriteFile(pendingFile(st), []byte("this is [not toml"), 0o600); err != nil {
+			t.Fatalf("write the damaged state: %v", err)
+		}
+		view, err := a.AbandonPayment(ctx, "")
+		if err != nil {
+			t.Fatalf("AbandonPayment: %v", err)
+		}
+		if view.Status != "abandoned" || !strings.Contains(view.Note, "could not be read") {
+			t.Errorf("view = %+v, want an abandoned state that says it could not be read", view)
+		}
+		if _, err := os.Stat(pendingFile(st)); !os.IsNotExist(err) {
+			t.Errorf("the damaged state file is still there: %v", err)
+		}
+		if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery"}); err != nil {
+			t.Errorf("ordering after removing the damaged state: %v", err)
+		}
+	})
+}
+
+func TestWayletUnreadablePaymentStateCanBeAbandonedInOrderCreate(t *testing.T) {
+	ctx := context.Background()
+	a, _, st, _ := newWayletApp(t)
+	if err := os.WriteFile(pendingFile(st), []byte("payment_id = ["), 0o600); err != nil {
+		t.Fatalf("write the damaged state: %v", err)
+	}
+
+	res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", AbandonPayment: true})
+	if err != nil {
+		t.Fatalf("order that abandons the damaged state: %v", err)
+	}
+	if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "could not be read") {
+		t.Errorf("notices = %q, want one saying the state could not be read", res.Notices)
+	}
+	if _, err := os.Stat(pendingFile(st)); !os.IsNotExist(err) {
+		t.Errorf("the damaged state file is still there: %v", err)
 	}
 }

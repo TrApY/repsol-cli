@@ -14,7 +14,7 @@ fake count /api/cart 1
 stderr '"code":"payment_pending"'
 stderr '"exit_code":8'
 stderr 'repsol order payment fake-payment-1 --wait'
-stderr '--force'
+stderr '--abandon-payment'
 ! exec repsol --error-format json order create --pay delivery
 stderr '"code":"payment_pending"'
 ! exec repsol --error-format json order create
@@ -34,22 +34,29 @@ stdout '"payment_status": "awaiting_payment"'
 ! exec repsol --error-format json order create --pay waylet
 stderr '"code":"payment_pending"'
 
-# --force is the owner's decision to start another one.
-exec repsol order create --pay waylet --force
+# --force is about the order history: it does not let go of a payment that may
+# have been paid. Giving the payment up is a separate, explicit decision.
+! exec repsol --error-format json order create --pay waylet --force
+stderr '"code":"payment_pending"'
+fake count /api/cart 1
+exec repsol order create --pay waylet --abandon-payment
 stdout '"payment_id": "fake-payment-2"'
+stdout '"notices"'
+stdout 'forgotten'
 fake count /api/cart 2
 
 # The newest payment is the open one.
 ! exec repsol --error-format json order create --pay waylet
 stderr 'repsol order payment fake-payment-2 --wait'
 
-# Once it is paid, the lookup closes it and the paid order takes over.
+# Once it is paid, the payment itself refuses the next order, on its own word.
 fake waylet pay fake-payment-2
 ! exec repsol --error-format json order create --pay waylet
 stderr '"code":"pending_order"'
 fake count /api/cart 2
 
-# The first payment was dropped by --force; with it paid or not, nothing is
-# tracked any more, so the guard that answers is the history's.
+# The first payment was abandoned, so only the second is tracked; the paid
+# order answers on the payment's own word, naming the order and its date.
 ! exec repsol --error-format json order create
 stderr '"code":"pending_order"'
+stderr '800000000000000003'
