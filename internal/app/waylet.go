@@ -132,16 +132,25 @@ func (a *App) startWayletPayment(
 // the owner sees, and settles what the profile remembers.
 //
 // A definite refusal proves that no link was handed out: the payment is
-// forgotten and the failure says nothing was started. Anything else leaves it
-// open. A transport failure, a 5xx or an answer that cannot be used came after
-// the request may have been processed, so the payment may exist, and the CLI
-// cannot tell. Nothing has been charged either way, because only the owner
-// paying the link charges, but the payment stays remembered and the failure is
-// not retryable.
+// forgotten and the failure says nothing was started. So does a failure that
+// came before the request left this machine (a name lookup, a refused
+// connection): nothing reached Repsol, so the payment is forgotten and the
+// order can be retried. Anything else leaves it open. A transport failure after
+// the request was sent, a 5xx, an answer that cannot be used or an interruption
+// came after the request may have been processed, so the payment may exist, and
+// the CLI cannot tell. Nothing has been charged either way, because only the
+// owner paying the link charges, and no link was handed out, but the payment
+// stays remembered and the failure is not retryable.
 func (a *App) wayletURLFailed(ctx context.Context, paymentID string, err error) error {
 	switch {
+	case apperr.From(err).NotSent:
+		_ = a.store.ClearPendingPayment(a.profile, paymentID)
+		typed := *apperr.From(err)
+		typed.Hint = "the request for the payment link never left this machine: " +
+			"no payment link was handed out and nothing was charged, so it is safe to try again"
+		return &typed
 	case ctx.Err() != nil:
-		return interruptedWaiting(paymentID)
+		return interruptedLinkRequest(paymentID)
 	case urlOutcomeUnknown(err):
 		return paymentOutcomeUnknown(paymentID, err)
 	}
@@ -283,7 +292,11 @@ func (a *App) waitForPayment(ctx context.Context, paymentID string, wait time.Du
 		case err == nil && found:
 			return order, nil
 		case errors.Is(err, context.DeadlineExceeded):
-			// The lookup ran into the deadline of the wait itself.
+			// The lookup ran into the deadline of the wait itself. The
+			// transport hands the context error back as it is (see
+			// httpx.Client.Do), so this is reachable; without it the timeout
+			// would report the lookup's deadline instead of the last real
+			// failure.
 			return repsolapi.PaymentOrder{}, paymentTimeout(paymentID, wait, lastErr)
 		case err != nil && apperr.From(err).Category != apperr.Network:
 			return repsolapi.PaymentOrder{}, withPaymentHint(err, paymentID)
@@ -336,6 +349,17 @@ func interruptedWaiting(paymentID string) error {
 	return apperr.New(apperr.Interrupted, "interrupted",
 		"interrupted while waiting for the Waylet payment").
 		WithHint(checkPaymentHint(paymentID))
+}
+
+// interruptedLinkRequest is the error of a payment link request the user
+// canceled. Unlike an interrupted wait there is no link to pay: none was handed
+// out, so the owner cannot pay anything, but the request may have been processed
+// and the payment may exist.
+func interruptedLinkRequest(paymentID string) error {
+	return apperr.New(apperr.Interrupted, "interrupted",
+		"interrupted while requesting the Waylet payment link; no link was handed out and nothing was charged, "+
+			"but the payment may have been created").
+		WithHint(fmt.Sprintf("do not start another order: run \"repsol order payment %s\" to check it", paymentID))
 }
 
 // withPaymentHint adds the check-the-payment hint to an error that ended a

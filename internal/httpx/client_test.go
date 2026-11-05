@@ -295,3 +295,60 @@ func TestDebugLogRedactsSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestDoReportsWhetherTheRequestWasSent(t *testing.T) {
+	// A failure before a single byte of the request is written cannot have been
+	// processed; one after it can, and a status is an answer.
+	dropped := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer dropped.Close()
+
+	hung := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-hung
+	}))
+	defer slow.Close()
+	defer close(hung)
+
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer failing.Close()
+
+	refused := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	refusedURL := refused.URL
+	refused.Close() // nothing listens there any more: the connection is refused
+
+	cases := []struct {
+		name        string
+		url         string
+		wantNotSent bool
+	}{
+		{"connection refused", refusedURL, true},
+		{"dropped after the request", dropped.URL, false},
+		{"timeout after the request", slow.URL, false},
+		{"server error", failing.URL, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New("repsol-cli/test", nil)
+			c.Attempts = 1
+			c.HTTP.Timeout = 300 * time.Millisecond
+
+			_, err := c.Do(context.Background(), Request{
+				Method: http.MethodPost, URL: tc.url + "/write", Body: []byte(`{"a":1}`), Endpoint: "/write",
+			})
+			if err == nil {
+				t.Fatal("Do succeeded, want a failure")
+			}
+			if got := apperr.From(err).NotSent; got != tc.wantNotSent {
+				t.Errorf("NotSent = %v, want %v (%v)", got, tc.wantNotSent, err)
+			}
+		})
+	}
+}

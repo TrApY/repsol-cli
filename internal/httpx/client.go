@@ -12,7 +12,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"github.com/felipe9962/repsol-cli/internal/apperr"
@@ -168,11 +170,19 @@ func (c *Client) attempt(
 		return nil, false, appErr
 	}
 
+	// The request may have been processed once its headers started to be
+	// written; a failure before that point proves it was not.
+	var written atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteHeaders: func() { written.Store(true) },
+	}))
+
 	start := time.Now()
 	raw, doErr := httpClient.Do(req)
 	elapsed := time.Since(start)
 	if doErr != nil {
 		appErr := transportError(method, endpoint, req.URL, doErr)
+		appErr.NotSent = !written.Load()
 		c.logAttempt(ctx, r, req, 0, elapsed, nil)
 		return nil, true, appErr
 	}
@@ -230,7 +240,8 @@ func newRequest(ctx context.Context, userAgent, method string, r Request) (*http
 }
 
 // transportError maps a failed round trip onto a retryable network error. Only
-// the host and the endpoint are reported; the full URL never appears.
+// the host and the endpoint are reported; the full URL never appears. The
+// caller says whether the request was sent (see apperr.Error.NotSent).
 func transportError(method, endpoint string, reqURL *url.URL, err error) *apperr.Error {
 	inner := err
 	var urlErr *url.Error

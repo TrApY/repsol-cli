@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -966,4 +970,119 @@ func TestWayletConfirmationWithoutExternalID(t *testing.T) {
 			t.Errorf("view = %+v, want a confirmed payment without an id", view)
 		}
 	})
+}
+
+// refuseDialsOnce wraps the transport of the app's client so that the request to
+// path finds its connection refused: the request never leaves the machine.
+func refuseDialsOnce(a *App, path string) {
+	var refuse atomic.Bool
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.DisableKeepAlives = true
+	dial := base.DialContext
+	base.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if refuse.Load() {
+			return nil, &net.OpError{Op: "dial", Net: network, Err: syscall.ECONNREFUSED}
+		}
+		return dial(ctx, network, addr)
+	}
+	a.api.HTTP.HTTP.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		refuse.Store(r.URL.Path == path)
+		return base.RoundTrip(r)
+	})
+}
+
+// roundTripFunc is an http.RoundTripper made of a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+// RoundTrip calls f.
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestWayletURLRequestThatNeverLeftIsNotRemembered(t *testing.T) {
+	ctx := context.Background()
+	a, fake, st, _ := newWayletApp(t)
+	refuseDialsOnce(a, pathWayletURL)
+
+	_, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+	typed := apperr.From(err)
+	if typed.Category == apperr.OutcomeUnknown || typed.Code == "payment_outcome_unknown" {
+		t.Fatalf("error = %v (%s): a refused connection proves the request was never sent", err, typed.Code)
+	}
+	if typed.Category != apperr.Network {
+		t.Errorf("category = %v, want the network failure it is", typed.Category)
+	}
+	if !strings.Contains(typed.Hint, "no payment") {
+		t.Errorf("hint %q should say no payment link was handed out", typed.Hint)
+	}
+	if fake.Count(pathCart) != 1 {
+		t.Errorf("%s requests = %d, want 1", pathCart, fake.Count(pathCart))
+	}
+	// Nothing was asked for the link, so there is nothing to wait for or to pay.
+	requirePendingPayment(t, st, "")
+
+	// The next order is not held back by it.
+	fake.SetHistory(nil)
+	a.api.HTTP.HTTP.Transport = nil
+	if _, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"}); err != nil {
+		t.Fatalf("the next order: %v", err)
+	}
+}
+
+func TestWayletInterruptedLinkRequestDoesNotPromiseALink(t *testing.T) {
+	ctx := context.Background()
+	a, fake, st, _ := newWayletApp(t)
+	entered, release := fake.Hold(pathWayletURL)
+	defer release()
+
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		<-entered
+		cancel()
+	}()
+
+	_, err := a.PlaceOrder(cctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+	typed := apperr.From(err)
+	if typed.Category != apperr.Interrupted {
+		t.Fatalf("error = %v, want an interruption", err)
+	}
+	// No link was handed out, so the message must not tell the owner that it
+	// may still be paid.
+	text := strings.ToLower(typed.Message + " " + typed.Hint)
+	if strings.Contains(text, "link may still be paid") || strings.Contains(text, "keep waiting") {
+		t.Errorf("message %q / hint %q promise a link that was never handed out", typed.Message, typed.Hint)
+	}
+	if !strings.Contains(text, "no link") {
+		t.Errorf("message %q / hint %q should say no link was handed out", typed.Message, typed.Hint)
+	}
+	if !strings.Contains(typed.Hint, "fake-payment-1") {
+		t.Errorf("hint %q should name the payment that may exist", typed.Hint)
+	}
+	// The request was sent, so the payment may exist: it stays remembered.
+	requirePendingPayment(t, st, "fake-payment-1")
+}
+
+func TestWayletWaitTimeoutKeepsTheLastLookupFailure(t *testing.T) {
+	a, fake, _, _ := newWayletApp(t)
+	// The first lookup fails on the server and is asked again; the second one
+	// never answers and runs into the deadline of the wait. The timeout reports
+	// the real failure, not the deadline of the lookup that ended it.
+	fake.FailNext(pathByPayment, 503)
+	pause := a.sleep
+	var release func()
+	a.sleep = func(ctx context.Context, d time.Duration) error {
+		_, release = fake.Hold(pathByPayment) // the lookup after the pause hangs
+		return pause(ctx, d)
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+
+	const wait = PaymentPollInterval + 300*time.Millisecond
+	_, err := a.PlaceOrder(context.Background(), PlaceOrderInput{Quantity: 1, Pay: "waylet", Wait: wait})
+	typed := requireErrorCode(t, err, "payment_timeout")
+	if !strings.Contains(typed.Error(), "503") {
+		t.Errorf("error %q does not carry the 503 of the last failed lookup", typed.Error())
+	}
 }

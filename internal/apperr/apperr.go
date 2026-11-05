@@ -78,6 +78,11 @@ type Error struct {
 	Endpoint string
 	// Retryable reports whether repeating the call could succeed.
 	Retryable bool
+	// NotSent reports that the request provably never left the client: it
+	// failed before the first byte was written, for instance on a name lookup
+	// or a refused connection. The server cannot have processed it. It is false
+	// for every other failure, including those that merely look like it.
+	NotSent bool
 	// Err is the wrapped cause, if any.
 	Err error
 }
