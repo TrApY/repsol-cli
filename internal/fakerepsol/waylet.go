@@ -150,6 +150,7 @@ func (s *Server) handleOrderByPayment(w http.ResponseWriter, r *http.Request) {
 		"unitPrice":     req.UnitPrice,
 		"paymentMethod": "waylet",
 		"paymentId":     id,
+		"address":       req.Address,
 		"agency": repsolapi.PlacedAgency{
 			Name:        "Agencia Test",
 			Phone:       "900 000 000",
