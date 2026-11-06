@@ -477,3 +477,56 @@ func TestDiscardPendingPayment(t *testing.T) {
 		t.Error("DiscardPendingPayment accepted an invalid profile name")
 	}
 }
+
+func TestPendingPaymentIsKnownByEitherId(t *testing.T) {
+	s := newStore(t)
+	started := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+
+	p := PendingPayment{PaymentID: "W-1", CartID: "cart-1", StartedAt: started}
+	for id, want := range map[string]bool{"W-1": true, "cart-1": true, "other": false, "": false} {
+		if got := p.Is(id); got != want {
+			t.Errorf("Is(%q) = %v, want %v", id, got, want)
+		}
+	}
+	// A state from before the two ids were told apart has no cart id: only its
+	// payment id names it.
+	old := PendingPayment{PaymentID: "cart-1", StartedAt: started}
+	if !old.Is("cart-1") || old.Is("W-1") || old.Is("") {
+		t.Errorf("old state Is(...) wrong: %+v", old)
+	}
+
+	if err := s.SavePendingPayment("default", p); err != nil {
+		t.Fatalf("SavePendingPayment: %v", err)
+	}
+	got, found, err := s.LoadPendingPayment("default")
+	if err != nil || !found || got.PaymentID != "W-1" || got.CartID != "cart-1" {
+		t.Fatalf("LoadPendingPayment = %+v, found %v, err %v; want both ids back", got, found, err)
+	}
+	// Clearing by the cart id drops it, and so does the other one.
+	if err := s.ClearPendingPayment("default", "cart-1"); err != nil {
+		t.Fatalf("ClearPendingPayment by cart id: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); found {
+		t.Error("the payment is still pending after it was cleared by its cart id")
+	}
+
+	// A file written before cart_id existed still loads, and is cleared by its id.
+	path, err := s.pendingPath("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "[pending_payment]\npayment_id = \"000000000042\"\nstarted_at = 2026-11-06T10:00:00Z\n"
+	if err := WriteAtomic(path, privateMode, []byte(legacy)); err != nil {
+		t.Fatalf("WriteAtomic: %v", err)
+	}
+	got, found, err = s.LoadPendingPayment("default")
+	if err != nil || !found || got.PaymentID != "000000000042" || got.CartID != "" {
+		t.Fatalf("legacy LoadPendingPayment = %+v, found %v, err %v", got, found, err)
+	}
+	if err := s.ClearPendingPayment("default", "000000000042"); err != nil {
+		t.Fatalf("ClearPendingPayment of a legacy state: %v", err)
+	}
+	if _, found, _ := s.LoadPendingPayment("default"); found {
+		t.Error("the legacy payment is still pending after it was cleared")
+	}
+}

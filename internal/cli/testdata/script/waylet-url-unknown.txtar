@@ -13,7 +13,7 @@ stderr '"exit_code":9'
 stderr '"retryable":false'
 stderr 'nothing has been charged'
 stderr 'may have been created'
-stderr 'repsol order payment fake-payment-1'
+stderr 'repsol order payment fake-cart-1'
 ! stderr 'no payment was started'
 fake count /api/cart 1
 fake count /api/waylet-payment/url 1

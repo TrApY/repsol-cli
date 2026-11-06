@@ -204,3 +204,94 @@ either.
   with the agency is let go with `repsol order payment ID --abandon`, which says
   in a note that the order exists, and the history may still list it as pending
   until its date (`--force` covers that, as in ADR 0002).
+
+## Amendment (2026-11-06): the payment id Repsol answers to
+
+The first real Waylet payment showed that the id the CLI kept is not the id the
+lookup knows. `POST /cart` answered `000001623288`; `payment_url` was
+`https://open.waylet.es?token=W00001623288:<timestamp>:<hash>&id=<id>`; after
+the owner paid, `GET /order-history/payment-id?paymentId=000001623288` answered
+`404 {"message":"Not Found"}` (which the CLI reads as "not yet", so a `--wait`
+would have run to its timeout), while `paymentId=W00001623288` answered the
+order. The history lists the order with `"paymentId":"W00001623288"` and
+`"paymentMethod":"Waylet"`. The cart id without the `W`, and the `id` of the URL,
+also answer 404.
+
+**What the web does** (public bundle, read only, nothing executed). The web
+never holds a second id of its own. After the cart it calls
+`getWayletUrl({paymentId})` with the cart's id and navigates to the URL it gets
+back. Waylet then returns the browser to `/payment-waylet-callback`
+(`9055.416a1609.js`), and that page does
+`new URLSearchParams(window.location.search).get("paymentId")` and passes that
+value, untouched, to `getOrderByPaymentId`. So the id the web looks the order up
+under is the `paymentId` query parameter that Waylet puts on the callback
+redirect; it is not derived from the cart answer or from the `/waylet-payment/url`
+answer, and the bundle contains no rule that turns the one into the other. The
+callback redirect itself is not visible to the CLI, which has no browser.
+
+**Decision.** The CLI cannot read the callback, so it takes the one place where
+Waylet shows its own id for the payment: the `token` of the payment URL, the
+part before the first `:` (`W00001623288`). This is an inference from one
+observed payment (the token's id is the id the history and the lookup use), not
+a rule found in the web code; no `W` is added or substituted by hand, and a
+link without such a token leaves the cart id as the only id, as before.
+
+- `payment_id` in the result, in the hints and in the state file is that id.
+  The state file (`payment-PROFILE.toml`) keeps the cart id beside it as
+  `cart_id`. The pending guard, the wait and `order payment` look up under the
+  first only; there is no second request per poll with the cart id, because
+  the cart id was observed to answer 404 even after the payment was made.
+- `order payment ID` and `--abandon ID` accept either id for the payment the
+  profile remembers; the lookup goes out under the working one and the result
+  names it. An id the profile does not remember is looked up as given.
+- A state file written before this change holds the cart id as `payment_id` and
+  no `cart_id`. It still loads and is still matched, cleared and abandoned by that
+  id, but it cannot be migrated: the link's id is not stored in it, and the
+  lookup under the cart id does not find a paid order. Such a payment shows as
+  `payment_pending` until `repsol order payment --abandon` or the 24 hours of
+  `PaymentStateTTL`; the owner who paid it can also check it with
+  `repsol order payment W…`, the id the order history shows.
+- If the link request fails after it was sent (`payment_outcome_unknown`) no
+  link came back, so the cart id is the only name the payment has and is what
+  the hint and the state carry. No link was handed out, so nothing can have been
+  paid.
+- The fake backend reproduces this: the cart answers `fake-cart-N`, the link's
+  token leads with `fake-payment-N`, and the lookup answers 404 to the cart id
+  and to the link's own `id`, before and after payment.
+
+## Amendment (2026-11-06): the address in the cart body
+
+The first real Waylet order was answered with "No hemos encontrado tu póliza,
+pero vamos a intentar gestionar tu solicitud", which the web's orders never
+were. The address was suspected, `isPeninsula` first.
+
+- **`isPeninsula` (observed in the bundle, `7394.f51fbc2e.js`).** The helper
+  both `onSelect` (`4855…`, `6886…`) and `sendStreetForm` call is module 2565,
+  `const r = e => !a.vl.some(t => t !== e)`, with `vl = ["35","38"]` (module
+  2441). For every `e` one of the two codes differs from it, so the helper is
+  `false` for every province, Alicante `03` included. `sendStreetForm` keeps a
+  boolean `isPeninsula` it is given and only calls the helper otherwise. The
+  other client-side source is the answer of `GET /address-maps`, which is
+  merged over the address for a `google` result; nothing else in the bundle
+  sets it to `true`. So the web sends `false`, as the CLI did.
+- **Observed on the account (read-only).** The history reports a top-level
+  `isPeninsula: true` for every order of the account, the CLI's own order
+  (sent with `false`) included. The server reports its own value, not the
+  request's. A request value of `false` is therefore not what separated the
+  CLI's order from the web's, and it is left `false`; sending `true` would
+  leave what the web does with nothing to back it.
+- **`autocompleteContent`.** `submit` strips it (`let{autocompleteContent:a,...o}`)
+  before the order address is built, so a Repsol street result reaches
+  `POST /cart` without it; a `google` result goes through `getAddressMaps(t)`
+  with it and keeps it. The CLI sent it always. `CreateTemporaryOrder` now drops
+  it unless the origin is `google`.
+- **The rest of the body.** `createTemporaryOrder` always sends `bill`,
+  `discount`, `tip` (the CLI does too) and sends `policy` and `exchange` only
+  with `onlinePolicy`, which the CLI refuses before this point.
+- **Floor and door.** `address set` stored what it was given, so an address set
+  without `--floor`/`--door` went out without them. It now takes them from the
+  newest order at the same street, number and postal code and says so.
+
+Whether the missing-policy message was caused by any of this is not known: the
+CLI has no way to place a test order. The next real Waylet order will tell.
+
