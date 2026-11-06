@@ -2,6 +2,8 @@ package fakerepsol
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,12 +148,18 @@ func TestFakeWayletAgreesWithClients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WayletURL: %v", err)
 	}
-	if want := "https://" + WayletHost + "/pay?paymentId=" + temp.PaymentID; link != want {
-		t.Fatalf("WayletURL = %q, want %q", link, want)
+	// The id the lookup knows leads the token of the link; it is not the id the
+	// cart answered, as live.
+	lookupID, _, _ := strings.Cut(mustURL(t, link).Query().Get("token"), ":")
+	if lookupID == "" || lookupID == temp.PaymentID || lookupID != f.LookupID(temp.PaymentID) {
+		t.Fatalf("WayletURL = %q, want a token that leads with a lookup id other than %q", link, temp.PaymentID)
+	}
+	if u := mustURL(t, link); u.Host != WayletHost || u.Query().Get("id") == "" {
+		t.Fatalf("WayletURL = %q, want the Waylet host and an id", link)
 	}
 
 	// 3. Nothing is confirmed, and the history is empty, until the payment is made.
-	if _, found, err := api.OrderByPaymentID(ctx, temp.PaymentID); err != nil || found {
+	if _, found, err := api.OrderByPaymentID(ctx, lookupID); err != nil || found {
 		t.Fatalf("OrderByPaymentID before paying = found %v, err %v; want not found", found, err)
 	}
 	if history, err := api.OrderHistory(ctx, 20, 0); err != nil || len(history) != 0 {
@@ -165,7 +173,14 @@ func TestFakeWayletAgreesWithClients(t *testing.T) {
 	if !f.ConfirmWaylet(temp.PaymentID) || f.ConfirmWaylet(temp.PaymentID) {
 		t.Fatal("ConfirmWaylet must confirm a payment exactly once")
 	}
-	order, found, err := api.OrderByPaymentID(ctx, temp.PaymentID)
+	// Paid, the order is found under the lookup id only: the cart id and the id
+	// of the link answer 404 still, as Repsol does.
+	for _, id := range []string{temp.PaymentID, mustURL(t, link).Query().Get("id")} {
+		if _, found, err := api.OrderByPaymentID(ctx, id); err != nil || found {
+			t.Fatalf("OrderByPaymentID(%q) after paying = found %v, err %v; want not found", id, found, err)
+		}
+	}
+	order, found, err := api.OrderByPaymentID(ctx, lookupID)
 	if err != nil || !found {
 		t.Fatalf("OrderByPaymentID after paying = found %v, err %v; want found", found, err)
 	}
@@ -184,4 +199,13 @@ func TestFakeWayletAgreesWithClients(t *testing.T) {
 	if _, _, err := wrong.OrderByPaymentID(ctx, temp.PaymentID); apperr.From(err).Category != apperr.Auth {
 		t.Fatalf("OrderByPaymentID with a wrong signature: %v, want an auth error", err)
 	}
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing %q: %v", raw, err)
+	}
+	return u
 }

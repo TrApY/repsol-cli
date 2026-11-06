@@ -245,13 +245,16 @@ Output without `--wait`, with exit code 0:
   "address": "Calle Falsa 1, 28001 Pueblo, Madrid",
   "agency": {"code": "0000000001"},
   "payment": "waylet",
-  "payment_url": "https://waylet.example.test/pay?paymentId=…",
+  "payment_url": "https://waylet.example.test/pay?token=fake-payment-1:…&id=…",
   "payment_id": "fake-payment-1",
   "payment_status": "awaiting_payment"
 }
 ```
 
-`id` is absent until the payment is confirmed. `payment_url` and `payment_id`
+`id` is absent until the payment is confirmed. `payment_id` is the id Repsol
+looks the paid order up under, which is the one the payment link's `token`
+leads with (ADR 0003, amendment of 2026-11-06), not the id the cart answered;
+`repsol order payment` accepts either. `payment_url` and `payment_id`
 are only present once the payment was started; `--dry-run` runs every check,
 creates nothing and prints neither. The API reports no expiry for the link, so
 there is no `expires` key.
