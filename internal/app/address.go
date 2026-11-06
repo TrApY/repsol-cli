@@ -56,6 +56,8 @@ type AddressView struct {
 	AgencyCode string `json:"agency_code"`
 	// Origin is "repsol" or "google", which candidate the address came from.
 	Origin string `json:"origin"`
+	// Note says what the command did that the user did not ask for.
+	Note string `json:"note,omitempty"`
 }
 
 // SetAddress resolves free text the way the web application does, stores the
@@ -120,11 +122,20 @@ func (a *App) SetAddress(ctx context.Context, in SetAddressInput) (AddressView, 
 	addr.AgencyCode = agencyCode
 
 	addr.PostalCode = postalCodePattern.FindString(addr.FullAddress)
+	// The web's isPeninsula helper, !["35","38"].some(c => c !== code), is
+	// false for every province, and the web sends that false. Repsol's history
+	// reports true for the CLI's own order as for the web's, so it does not
+	// echo this field: it is not one to "fix" (docs/adr/0003-waylet-payment.md).
 	addr.IsPeninsula = false
 	addr.Floor = in.Floor
 	addr.Door = in.Door
 	addr.Details = in.Details
 	addr.AutocompleteContent = chosen.FullAddress
+
+	var note string
+	if in.Floor == "" && in.Door == "" {
+		addr.Floor, addr.Door, note = a.floorAndDoorFromHistory(ctx, addr)
+	}
 
 	err = a.store.UpdateConfig(func(cfg *config.Config) error {
 		if cfg.Profiles == nil {
@@ -138,7 +149,56 @@ func (a *App) SetAddress(ctx context.Context, in SetAddressInput) (AddressView, 
 	if err != nil {
 		return AddressView{}, err
 	}
-	return a.addressView(addr), nil
+	view := a.addressView(addr)
+	view.Note = note
+	return view, nil
+}
+
+// historyScan is how many past orders address set reads to find the floor and
+// door of an address; it is the most the history answers in one page.
+const historyScan = 100
+
+// floorAndDoorFromHistory returns the floor and door of the newest order in the
+// history that went to the same street, number and postal code as addr, and a
+// note that says where they came from. It returns nothing when no such order
+// has a floor or a door, and when the history cannot be read (no session, or
+// the call failed): it is a convenience, and the address is stored without it.
+func (a *App) floorAndDoorFromHistory(ctx context.Context, addr repsolapi.Address) (floor, door, note string) {
+	history, err := a.api.OrderHistory(ctx, historyScan, 0)
+	if err != nil {
+		return "", "", ""
+	}
+	for _, entry := range history {
+		if !sameDelivery(entry.Address, addr) {
+			continue
+		}
+		floor, door = strings.TrimSpace(entry.Address.Floor), strings.TrimSpace(entry.Address.Door)
+		if floor == "" && door == "" {
+			// The newest order here had neither: that is the answer.
+			return "", "", ""
+		}
+		var parts []string
+		if floor != "" {
+			parts = append(parts, "floor "+floor)
+		}
+		if door != "" {
+			parts = append(parts, "door "+door)
+		}
+		return floor, door, fmt.Sprintf("no --floor or --door given: took %s from the newest order in the history at this address (reference %s); pass --floor and --door to change them",
+			strings.Join(parts, ", "), entry.ReferenceSAC)
+	}
+	return "", "", ""
+}
+
+// sameDelivery reports whether a history address is the street, number and
+// postal code of addr. History addresses can be partial, so an address without
+// a street, a number or a postal code matches nothing.
+func sameDelivery(h repsolapi.HistoryAddress, addr repsolapi.Address) bool {
+	street, number, postal := strings.TrimSpace(addr.Street), strings.TrimSpace(addr.Number), strings.TrimSpace(addr.PostalCode)
+	return street != "" && number != "" && postal != "" &&
+		strings.EqualFold(strings.TrimSpace(h.Street), street) &&
+		strings.EqualFold(strings.TrimSpace(h.Number), number) &&
+		strings.TrimSpace(h.PostalCode) == postal
 }
 
 // ShowAddress returns the stored address of the profile. It is a usage error

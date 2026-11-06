@@ -142,6 +142,14 @@ number count. Several candidates exit 2 (`ambiguous_address`) and list them as
 neutral candidate exits 2 (`address_not_supported`); a geocoded address the
 agency does not serve exits 8 (`address_not_served`).
 
+Without `--floor` and `--door`, a signed-in `address set` looks in the newest 100
+orders of the history for the newest one at the same street, number and postal
+code and, when it has a floor or a door, stores them and says so in `note`
+(`no --floor or --door given: took floor 1, door G from the newest order in the
+history at this address …`). Giving either flag turns that off. If the history
+cannot be read (no session, a failed call) the address is stored without them
+and without a note.
+
 ## `repsol catalog list`
 
 ```json

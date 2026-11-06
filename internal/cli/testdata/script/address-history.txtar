@@ -1,0 +1,18 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+
+# An order placed with a floor and a door puts them in the history. Setting the
+# same address again without them takes them from there and says so; typing
+# them wins.
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+exec repsol order create
+exec repsol address set 'Calle Falsa 1, Pueblo'
+stdout '"floor": "2"'
+stdout '"door": "B"'
+stdout '"note": ".*took floor 2, door B from the newest order in the history'
+exec repsol address show
+stdout '"floor": "2"'
+
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 7 --door Z
+stdout '"floor": "7"'
+! stdout '"note"'

@@ -124,6 +124,9 @@ func (v AddressView) PrettyPrint(w io.Writer) error {
 	if v.Origin != "" {
 		fmt.Fprintf(&b, "origin: %s\n", v.Origin)
 	}
+	if v.Note != "" {
+		fmt.Fprintf(&b, "note: %s\n", v.Note)
+	}
 	_, err := w.Write(b.Bytes())
 	return err
 }
