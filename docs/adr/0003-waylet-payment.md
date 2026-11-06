@@ -258,3 +258,40 @@ link without such a token leaves the cart id as the only id, as before.
 - The fake backend reproduces this: the cart answers `fake-cart-N`, the link's
   token leads with `fake-payment-N`, and the lookup answers 404 to the cart id
   and to the link's own `id`, before and after payment.
+
+## Amendment (2026-11-06): the address in the cart body
+
+The first real Waylet order was answered with "No hemos encontrado tu póliza,
+pero vamos a intentar gestionar tu solicitud", which the web's orders never
+were. The address was suspected, `isPeninsula` first.
+
+- **`isPeninsula` (observed in the bundle, `7394.f51fbc2e.js`).** The helper
+  both `onSelect` (`4855…`, `6886…`) and `sendStreetForm` call is module 2565,
+  `const r = e => !a.vl.some(t => t !== e)`, with `vl = ["35","38"]` (module
+  2441). For every `e` one of the two codes differs from it, so the helper is
+  `false` for every province, Alicante `03` included. `sendStreetForm` keeps a
+  boolean `isPeninsula` it is given and only calls the helper otherwise. The
+  other client-side source is the answer of `GET /address-maps`, which is
+  merged over the address for a `google` result; nothing else in the bundle
+  sets it to `true`. So the web sends `false`, as the CLI did.
+- **Observed on the account (read-only).** The history reports a top-level
+  `isPeninsula: true` for every order of the account, the CLI's own order
+  (sent with `false`) included. The server reports its own value, not the
+  request's. A request value of `false` is therefore not what separated the
+  CLI's order from the web's, and it is left `false`; sending `true` would
+  leave what the web does with nothing to back it.
+- **`autocompleteContent`.** `submit` strips it (`let{autocompleteContent:a,...o}`)
+  before the order address is built, so a Repsol street result reaches
+  `POST /cart` without it; a `google` result goes through `getAddressMaps(t)`
+  with it and keeps it. The CLI sent it always. `CreateTemporaryOrder` now drops
+  it unless the origin is `google`.
+- **The rest of the body.** `createTemporaryOrder` always sends `bill`,
+  `discount`, `tip` (the CLI does too) and sends `policy` and `exchange` only
+  with `onlinePolicy`, which the CLI refuses before this point.
+- **Floor and door.** `address set` stored what it was given, so an address set
+  without `--floor`/`--door` went out without them. It now takes them from the
+  newest order at the same street, number and postal code and says so.
+
+Whether the missing-policy message was caused by any of this is not known: the
+CLI has no way to place a test order. The next real Waylet order will tell.
+

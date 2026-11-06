@@ -84,6 +84,12 @@ func (c *Client) CreateTemporaryOrder(ctx context.Context, r TemporaryOrderReque
 		return TemporaryOrder{}, err
 	}
 	r.UserGigyaUID = auth.UID
+	// The web drops autocompleteContent from the address of a Repsol street
+	// result before it goes into the order; only a Google result, which the
+	// address mapping returns whole, keeps it.
+	if !strings.EqualFold(r.Address.Origin, "google") {
+		r.Address.AutocompleteContent = ""
+	}
 	header := authHeaders(auth)
 	addTelemetry(header, c.Telemetry, endpoint)
 	resp, err := doWrite(ctx, c.HTTP, c.BaseURL, endpoint, header, r)
