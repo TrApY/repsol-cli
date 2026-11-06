@@ -18,10 +18,23 @@ import (
 // handed out, Repsol has no order until the owner pays, so the history cannot
 // tell that another order would pay the same delivery twice.
 type PendingPayment struct {
-	// PaymentID names the payment, as the payment lookup takes it.
+	// PaymentID names the payment, as the payment lookup takes it. It is the
+	// Waylet id carried by the payment link (see repsolapi.WayletPaymentID),
+	// not the id the cart answered: the lookup does not know that one. A file
+	// written before the two were told apart holds the cart id here.
 	PaymentID string `toml:"payment_id"`
+	// CartID is the id POST /cart answered, kept when it differs from
+	// PaymentID so that either name finds this payment. It is empty when the
+	// two are the same, and in a file written before they were told apart.
+	CartID string `toml:"cart_id,omitempty"`
 	// StartedAt is when the payment was started.
 	StartedAt time.Time `toml:"started_at"`
+}
+
+// Is reports whether id names this payment: the id the lookup takes, or the id
+// the cart answered.
+func (p PendingPayment) Is(id string) bool {
+	return id != "" && (id == p.PaymentID || (p.CartID != "" && id == p.CartID))
 }
 
 // pendingFile is the on-disk layout of one profile's payment-<profile>.toml.
@@ -80,7 +93,8 @@ func (s Store) SavePendingPayment(profile string, p PendingPayment) error {
 }
 
 // ClearPendingPayment drops the pending payment of a profile when it is the
-// payment paymentID, or whatever it is when paymentID is empty. A different
+// payment paymentID (under either of its ids), or whatever it is when
+// paymentID is empty. A different
 // pending payment, started after the one that was resolved, is left alone.
 func (s Store) ClearPendingPayment(profile, paymentID string) error {
 	path, err := s.pendingPath(profile)
@@ -100,7 +114,7 @@ func (s Store) ClearPendingPayment(profile, paymentID string) error {
 	if f.Payment == nil {
 		return nil
 	}
-	if paymentID != "" && f.Payment.PaymentID != paymentID {
+	if paymentID != "" && !f.Payment.Is(paymentID) {
 		return nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {

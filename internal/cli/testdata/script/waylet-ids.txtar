@@ -1,0 +1,42 @@
+env REPSOL_LOGIN_TOKEN=fake-token
+env REPSOL_GMID=fake-gmid
+exec repsol address set 'Calle Falsa 1, Pueblo' --floor 2 --door B
+fake check order
+
+# The cart answers one id (fake-cart-1) and the payment link carries another
+# (fake-payment-1). Repsol only finds the paid order under the second one, so
+# the command reports and remembers that one. The cart id is not printed.
+exec repsol order create --pay waylet
+stdout '"payment_id": "fake-payment-1"'
+! stdout 'fake-cart-1'
+
+# Unpaid: the lookup under either name says so, and asks Repsol under the
+# link's id only.
+exec repsol order payment fake-payment-1
+stdout '"payment_status": "awaiting_payment"'
+exec repsol order payment fake-cart-1
+stdout '"payment_status": "awaiting_payment"'
+stdout '"payment_id": "fake-payment-1"'
+
+# Paid: either name confirms it.
+fake waylet pay fake-payment-1
+exec repsol order payment fake-payment-1
+stdout '"payment_status": "confirmed"'
+stdout '"id": "800000000000000003"'
+exec repsol order payment fake-cart-1
+stdout '"payment_status": "confirmed"'
+stdout '"payment_id": "fake-payment-1"'
+stdout '"id": "800000000000000003"'
+
+# A payment given up by its cart id is forgotten.
+exec repsol order payment fake-cart-1 --abandon
+stdout '"payment_status": "abandoned"'
+stdout '"payment_id": "fake-payment-1"'
+! exec repsol --error-format json order payment --abandon
+stderr '"code":"no_pending_payment"'
+
+# --wait finds the order under the link's id, as the owner pays while it waits.
+exec repsol order create --pay waylet --abandon-payment --force
+fake waylet pay-after 1
+exec repsol order payment fake-payment-2 --wait=1m
+stdout '"payment_status": "confirmed"'

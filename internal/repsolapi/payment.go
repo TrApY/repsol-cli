@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/felipe9962/repsol-cli/internal/apperr"
 )
@@ -124,6 +125,24 @@ func (c *Client) WayletURL(ctx context.Context, paymentID string) (string, error
 			"the Waylet answer carries no https payment URL", resp, endpoint)
 	}
 	return out.RedirectionURL, nil
+}
+
+// WayletPaymentID returns the id a Waylet payment is looked up under, read from
+// the payment URL: the part of the token query parameter before its first
+// colon. The URL looks like
+//
+//	https://open.waylet.es?token=W00001623288:1796519223591:<hash>&id=<id>
+//
+// and the id is W00001623288, while the cart answered 000001623288 and the
+// lookup answers 404 to that one. It returns "" when the URL carries no such
+// token, and the caller falls back to the id of the cart.
+func WayletPaymentID(link string) string {
+	u, err := url.Parse(link)
+	if err != nil {
+		return ""
+	}
+	id, _, _ := strings.Cut(u.Query().Get("token"), ":")
+	return strings.TrimSpace(id)
 }
 
 // OrderByPaymentID looks up the order a payment produced. It is a safe read

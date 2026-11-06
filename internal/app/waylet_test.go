@@ -139,8 +139,16 @@ func TestWayletReturnsPaymentURL(t *testing.T) {
 		t.Errorf("PaymentID = %q, want fake-payment-1", res.PaymentID)
 	}
 	u, err := url.Parse(res.PaymentURL)
-	if err != nil || u.Scheme != "https" || u.Host != fakerepsol.WayletHost || u.Query().Get("paymentId") != res.PaymentID {
-		t.Errorf("PaymentURL = %q, want the https Waylet page of %s", res.PaymentURL, res.PaymentID)
+	if err != nil || u.Scheme != "https" || u.Host != fakerepsol.WayletHost {
+		t.Errorf("PaymentURL = %q, want an https Waylet page", res.PaymentURL)
+	}
+	// The payment is named by the id the link's token leads with, the one Repsol
+	// answers to, and not by the id the cart answered.
+	if token, _, _ := strings.Cut(u.Query().Get("token"), ":"); token != res.PaymentID {
+		t.Errorf("PaymentURL = %q, want a token that leads with %s", res.PaymentURL, res.PaymentID)
+	}
+	if res.PaymentID == fake.PaymentIDs()[0] {
+		t.Errorf("PaymentID = %q is the id of the cart, which the payment lookup does not know", res.PaymentID)
 	}
 	if res.Quantity != 2 || res.Total != 37.78 || res.DeliveryDate != "2026-11-04" {
 		t.Errorf("result = %+v, want 2 bottles, 37.78 EUR, 2026-11-04", res)
@@ -856,7 +864,8 @@ func TestWayletURLFailureAfterSendIsOutcomeUnknown(t *testing.T) {
 				!strings.Contains(typed.Message+" "+typed.Hint, "may have been created") {
 				t.Errorf("%q / %q must say that nothing was charged but the payment may exist", typed.Message, typed.Hint)
 			}
-			if !strings.Contains(typed.Hint, "repsol order payment fake-payment-1") {
+			// No link came back, so the cart id is the only name the payment has.
+			if !strings.Contains(typed.Hint, "repsol order payment fake-cart-1") {
 				t.Errorf("hint %q does not name the lookup of the payment", typed.Hint)
 			}
 			if fake.Count(pathCart) != 1 || fake.Count(pathWayletURL) != 1 {
@@ -864,7 +873,7 @@ func TestWayletURLFailureAfterSendIsOutcomeUnknown(t *testing.T) {
 			}
 
 			// The payment may exist, so the next order is held back.
-			requirePendingPayment(t, st, "fake-payment-1")
+			requirePendingPayment(t, st, "fake-cart-1")
 			_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
 			requireErrorCode(t, err, "payment_pending")
 		})
@@ -925,7 +934,7 @@ func TestWayletTransportTimeoutAfterSending(t *testing.T) {
 		if fake.Count(pathCart) != 1 || fake.Count(pathWayletURL) != 1 {
 			t.Errorf("cart=%d url=%d, want 1 and 1", fake.Count(pathCart), fake.Count(pathWayletURL))
 		}
-		requirePendingPayment(t, st, "fake-payment-1")
+		requirePendingPayment(t, st, "fake-cart-1")
 	})
 }
 
@@ -1195,11 +1204,12 @@ func TestWayletInterruptedLinkRequestDoesNotPromiseALink(t *testing.T) {
 	if !strings.Contains(text, "no link") {
 		t.Errorf("message %q / hint %q should say no link was handed out", typed.Message, typed.Hint)
 	}
-	if !strings.Contains(typed.Hint, "fake-payment-1") {
+	if !strings.Contains(typed.Hint, "fake-cart-1") {
 		t.Errorf("hint %q should name the payment that may exist", typed.Hint)
 	}
-	// The request was sent, so the payment may exist: it stays remembered.
-	requirePendingPayment(t, st, "fake-payment-1")
+	// The request was sent, so the payment may exist: it stays remembered, under
+	// the only name it has, the cart id.
+	requirePendingPayment(t, st, "fake-cart-1")
 }
 
 func TestWayletWaitTimeoutKeepsTheLastLookupFailure(t *testing.T) {
@@ -1639,4 +1649,105 @@ func TestWayletUnreadablePaymentStateCanBeAbandonedInOrderCreate(t *testing.T) {
 	if _, err := os.Stat(pendingFile(st)); !os.IsNotExist(err) {
 		t.Errorf("the damaged state file is still there: %v", err)
 	}
+}
+
+// TestWayletPaymentIsLookedUpUnderTheLinkId is the incident: the cart answered
+// 000001623288 and Repsol only found the paid order under W00001623288, the id
+// the payment link carries; the CLI kept and asked the first one, so the order
+// was never seen. The fake answers 404 to the cart id, as Repsol does.
+func TestWayletPaymentIsLookedUpUnderTheLinkId(t *testing.T) {
+	ctx := context.Background()
+	a, fake, st, _ := newWayletApp(t)
+
+	res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+	if err != nil {
+		t.Fatalf("PlaceOrder: %v", err)
+	}
+	cartID := fake.PaymentIDs()[0]
+	if res.PaymentID != fake.LookupID(cartID) || res.PaymentID == cartID {
+		t.Fatalf("PaymentID = %q, want the lookup id %q and not the cart id %q", res.PaymentID, fake.LookupID(cartID), cartID)
+	}
+
+	// The state remembers the id that works.
+	requirePendingPayment(t, st, res.PaymentID)
+
+	// Unpaid: asking under either name says so.
+	for _, id := range []string{res.PaymentID, cartID} {
+		view, err := a.PaymentStatus(ctx, id, 0)
+		if err != nil || view.Status != paymentAwaiting {
+			t.Fatalf("PaymentStatus(%s) before paying = %+v, %v; want awaiting_payment", id, view, err)
+		}
+	}
+	// The guard asks under the id that works and sees the payment unpaid.
+	_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+	requireErrorCode(t, err, "payment_pending")
+	if fake.Count(pathCart) != 1 {
+		t.Errorf("cart requests = %d, want 1", fake.Count(pathCart))
+	}
+
+	// Paid: either name finds the order, and the id on the wire is the right one.
+	if !fake.ConfirmWaylet(res.PaymentID) {
+		t.Fatal("the fake did not confirm the payment")
+	}
+	for _, id := range []string{res.PaymentID, cartID} {
+		view, err := a.PaymentStatus(ctx, id, 0)
+		if err != nil || view.Status != paymentConfirmed || view.ID == "" {
+			t.Fatalf("PaymentStatus(%s) after paying = %+v, %v; want confirmed with an order", id, view, err)
+		}
+		if view.PaymentID != res.PaymentID {
+			t.Errorf("PaymentStatus(%s).PaymentID = %q, want %q", id, view.PaymentID, res.PaymentID)
+		}
+	}
+	for _, r := range fake.Requests(pathByPayment) {
+		if q := r.Query.Get("paymentId"); q != res.PaymentID {
+			t.Errorf("a lookup went out under %q, want only %q", q, res.PaymentID)
+		}
+	}
+	// A paid delivery still to come refuses the next order, through the payment.
+	_, err = a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "delivery", Force: true})
+	requireErrorCode(t, err, "pending_order")
+}
+
+func TestWayletAbandonAcceptsEitherIdOfThePayment(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"lookup id", "cart id"} {
+		t.Run(name, func(t *testing.T) {
+			a, fake, st, _ := newWayletApp(t)
+			res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+			if err != nil {
+				t.Fatalf("PlaceOrder: %v", err)
+			}
+			id := res.PaymentID
+			if name == "cart id" {
+				id = fake.PaymentIDs()[0]
+			}
+			view, err := a.AbandonPayment(ctx, id)
+			if err != nil || view.Status != paymentAbandoned || view.PaymentID != res.PaymentID {
+				t.Fatalf("AbandonPayment(%s) = %+v, %v; want abandoned %s", id, view, err, res.PaymentID)
+			}
+			requirePendingPayment(t, st, "")
+		})
+	}
+}
+
+// TestWayletStateFromBeforeTheFixIsStillUnderstood: an older state file has the
+// cart id as its payment id and no cart_id. It is still held, named by that id,
+// and can still be given up with it.
+func TestWayletStateFromBeforeTheFixIsStillUnderstood(t *testing.T) {
+	ctx := context.Background()
+	a, _, st, clock, _ := newWayletAppClock(t)
+	if err := st.SavePendingPayment(defaultTestProfile, config.PendingPayment{
+		PaymentID: "fake-cart-1", StartedAt: clock.Now(),
+	}); err != nil {
+		t.Fatalf("SavePendingPayment: %v", err)
+	}
+
+	_, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+	requireErrorCode(t, err, "payment_pending")
+
+	view, err := a.AbandonPayment(ctx, "fake-cart-1")
+	if err != nil || view.Status != paymentAbandoned {
+		t.Fatalf("AbandonPayment of the old id = %+v, %v; want abandoned", view, err)
+	}
+	requirePendingPayment(t, st, "")
 }

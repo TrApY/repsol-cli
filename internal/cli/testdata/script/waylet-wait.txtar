@@ -7,7 +7,7 @@ fake waylet pay-after 1
 # --wait prints the link on stderr at once, then the confirmed order on stdout.
 exec repsol order create --pay waylet --wait
 stderr 'open this page to pay with Waylet'
-stderr 'https://waylet.example.test/pay\?paymentId=fake-payment-1'
+stderr 'https://waylet.example.test/pay\?token=fake-payment-1%3A'
 stdout '"payment_status": "confirmed"'
 stdout '"id": "800000000000000003"'
 stdout '"payment_url": "https://waylet.example.test/pay'

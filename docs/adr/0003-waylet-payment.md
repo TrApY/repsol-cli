@@ -204,3 +204,57 @@ either.
   with the agency is let go with `repsol order payment ID --abandon`, which says
   in a note that the order exists, and the history may still list it as pending
   until its date (`--force` covers that, as in ADR 0002).
+
+## Amendment (2026-11-06): the payment id Repsol answers to
+
+The first real Waylet payment showed that the id the CLI kept is not the id the
+lookup knows. `POST /cart` answered `000001623288`; `payment_url` was
+`https://open.waylet.es?token=W00001623288:<timestamp>:<hash>&id=<id>`; after
+the owner paid, `GET /order-history/payment-id?paymentId=000001623288` answered
+`404 {"message":"Not Found"}` (which the CLI reads as "not yet", so a `--wait`
+would have run to its timeout), while `paymentId=W00001623288` answered the
+order. The history lists the order with `"paymentId":"W00001623288"` and
+`"paymentMethod":"Waylet"`. The cart id without the `W`, and the `id` of the URL,
+also answer 404.
+
+**What the web does** (public bundle, read only, nothing executed). The web
+never holds a second id of its own. After the cart it calls
+`getWayletUrl({paymentId})` with the cart's id and navigates to the URL it gets
+back. Waylet then returns the browser to `/payment-waylet-callback`
+(`9055.416a1609.js`), and that page does
+`new URLSearchParams(window.location.search).get("paymentId")` and passes that
+value, untouched, to `getOrderByPaymentId`. So the id the web looks the order up
+under is the `paymentId` query parameter that Waylet puts on the callback
+redirect; it is not derived from the cart answer or from the `/waylet-payment/url`
+answer, and the bundle contains no rule that turns the one into the other. The
+callback redirect itself is not visible to the CLI, which has no browser.
+
+**Decision.** The CLI cannot read the callback, so it takes the one place where
+Waylet shows its own id for the payment: the `token` of the payment URL, the
+part before the first `:` (`W00001623288`). This is an inference from one
+observed payment (the token's id is the id the history and the lookup use), not
+a rule found in the web code; no `W` is added or substituted by hand, and a
+link without such a token leaves the cart id as the only id, as before.
+
+- `payment_id` in the result, in the hints and in the state file is that id.
+  The state file (`payment-PROFILE.toml`) keeps the cart id beside it as
+  `cart_id`. The pending guard, the wait and `order payment` look up under the
+  first only; there is no second request per poll with the cart id, because
+  the cart id was observed to answer 404 even after the payment was made.
+- `order payment ID` and `--abandon ID` accept either id for the payment the
+  profile remembers; the lookup goes out under the working one and the result
+  names it. An id the profile does not remember is looked up as given.
+- A state file written before this change holds the cart id as `payment_id` and
+  no `cart_id`. It still loads and is still matched, cleared and abandoned by that
+  id, but it cannot be migrated: the link's id is not stored in it, and the
+  lookup under the cart id does not find a paid order. Such a payment shows as
+  `payment_pending` until `repsol order payment --abandon` or the 24 hours of
+  `PaymentStateTTL`; the owner who paid it can also check it with
+  `repsol order payment W…`, the id the order history shows.
+- If the link request fails after it was sent (`payment_outcome_unknown`) no
+  link came back, so the cart id is the only name the payment has and is what
+  the hint and the state carry. No link was handed out, so nothing can have been
+  paid.
+- The fake backend reproduces this: the cart answers `fake-cart-N`, the link's
+  token leads with `fake-payment-N`, and the lookup answers 404 to the cart id
+  and to the link's own `id`, before and after payment.
