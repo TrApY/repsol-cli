@@ -16,7 +16,7 @@ exec repsol order create --pay waylet
 stdout '"payment": "waylet"'
 stdout '"payment_status": "awaiting_payment"'
 stdout '"payment_id": "fake-payment-1"'
-stdout '"payment_url": "https://waylet.example.test/pay\?paymentId=fake-payment-1"'
+stdout '"payment_url": "https://waylet.example.test/pay\?token=fake-payment-1%3A'
 ! stdout '"id":'
 fake count /api/cart 1
 fake count /api/waylet-payment/url 1

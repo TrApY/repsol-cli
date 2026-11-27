@@ -96,10 +96,8 @@ func (a *App) startWayletPayment(
 		// track, whatever happened to the request.
 		return OrderResult{}, noPaymentStarted(err)
 	}
-	if err := a.store.SavePendingPayment(a.profile, config.PendingPayment{
-		PaymentID: temp.PaymentID,
-		StartedAt: a.now(),
-	}); err != nil {
+	pending := config.PendingPayment{PaymentID: temp.PaymentID, StartedAt: a.now()}
+	if err := a.store.SavePendingPayment(a.profile, pending); err != nil {
 		return OrderResult{}, err
 	}
 
@@ -108,21 +106,35 @@ func (a *App) startWayletPayment(
 		return OrderResult{}, a.wayletURLFailed(ctx, temp.PaymentID, err)
 	}
 
-	result.PaymentID = temp.PaymentID
+	// The lookup does not know the id the cart answered: it answers under the
+	// id the payment link carries. From here on the payment goes by that one,
+	// in the state file, in the result and in every hint, and the cart id is
+	// kept beside it so that either finds the payment. A link that names no
+	// such id leaves the cart id, the only one there is.
+	paymentID := temp.PaymentID
+	if id := repsolapi.WayletPaymentID(link); id != "" && id != temp.PaymentID {
+		paymentID = id
+		pending.PaymentID, pending.CartID = id, temp.PaymentID
+		if err := a.store.SavePendingPayment(a.profile, pending); err != nil {
+			return OrderResult{}, err
+		}
+	}
+
+	result.PaymentID = paymentID
 	result.PaymentURL = link
 	result.PaymentStatus = paymentAwaiting
 	if in.OnPaymentLink != nil {
-		in.OnPaymentLink(PaymentLink{URL: link, ID: temp.PaymentID})
+		in.OnPaymentLink(PaymentLink{URL: link, ID: paymentID})
 	}
 	if in.Wait == 0 {
 		return result, nil
 	}
 
-	order, err := a.waitForPayment(ctx, temp.PaymentID, in.Wait)
+	order, err := a.waitForPayment(ctx, paymentID, in.Wait)
 	if err != nil {
 		return OrderResult{}, err
 	}
-	a.settlePaid(temp.PaymentID, order)
+	a.settlePaid(paymentID, order)
 	result.PaymentStatus = paymentConfirmed
 	result.ID = string(order.ExternalID)
 	if order.DeliveryDate != "" {
@@ -393,7 +405,7 @@ func (a *App) AbandonPayment(ctx context.Context, paymentID string) (PaymentView
 		return PaymentView{}, apperr.New(apperr.NotFound, "no_pending_payment",
 			"no Waylet payment is remembered for this profile").
 			WithHint("there is nothing to abandon; \"repsol order create\" is not held back by a payment")
-	case paymentID != "" && paymentID != pending.PaymentID:
+	case paymentID != "" && !pending.Is(paymentID):
 		return PaymentView{}, apperr.New(apperr.Refused, "payment_mismatch",
 			"the Waylet payment remembered for this profile is not the one named").
 			WithHint(fmt.Sprintf("the remembered payment is %s", pending.PaymentID))
@@ -433,7 +445,10 @@ func agencyOf(order repsolapi.PaymentOrder) *AgencyView {
 	return nil
 }
 
-// PaymentStatus looks up the order a Waylet payment produced. With a zero wait
+// PaymentStatus looks up the order a Waylet payment produced. The id may be
+// either name of the payment the profile remembers (the one the lookup takes or
+// the one the cart answered); the lookup always goes out under the first. An id
+// the profile does not remember is looked up as given. With a zero wait
 // it asks once and reports "awaiting_payment" when the payment is not confirmed
 // yet; with a wait it polls until the payment is confirmed or the wait ends in
 // payment_timeout. It only reads, so it takes no lock and is safe to repeat.
@@ -446,6 +461,11 @@ func (a *App) PaymentStatus(ctx context.Context, paymentID string, wait time.Dur
 	}
 	if wait < 0 {
 		return PaymentView{}, invalidWait(wait)
+	}
+	// An unreadable state file is not this command's business: it looks the id
+	// up as given, and the order that finds the file damaged says so.
+	if pending, found, err := a.store.LoadPendingPayment(a.profile); err == nil && found && pending.Is(paymentID) {
+		paymentID = pending.PaymentID
 	}
 
 	var (

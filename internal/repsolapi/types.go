@@ -98,7 +98,7 @@ type Address struct {
 	Details             string      `json:"details" toml:"details"`
 	PostalCode          string      `json:"postalCode" toml:"postalCode"`
 	IsPeninsula         bool        `json:"isPeninsula" toml:"isPeninsula"`
-	AutocompleteContent string      `json:"autocompleteContent" toml:"autocompleteContent"`
+	AutocompleteContent string      `json:"autocompleteContent,omitempty" toml:"autocompleteContent"`
 }
 
 // AgencyInfo is the agency that serves an address.

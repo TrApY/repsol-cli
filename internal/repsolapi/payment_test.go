@@ -328,3 +328,23 @@ func TestPollOrderByPaymentIDDoesNotRetry(t *testing.T) {
 		t.Errorf("a lookup sent %d requests, want its 3 attempts", got)
 	}
 }
+
+func TestWayletPaymentID(t *testing.T) {
+	for name, tc := range map[string]struct{ link, want string }{
+		"live shape":     {"https://open.waylet.es?token=W00000000042:1700000000000:abcdef0123&id=77", "W00000000042"},
+		"with a path":    {"https://open.waylet.es/pay?token=W00000000042:1:h&id=7", "W00000000042"},
+		"escaped colons": {"https://open.waylet.es/pay?token=W42%3A1%3Ah&id=7", "W42"},
+		"no colon":       {"https://open.waylet.es?token=W42", "W42"},
+		"no token":       {"https://open.waylet.es?id=77", ""},
+		"empty token":    {"https://open.waylet.es?token=&id=77", ""},
+		"leading colon":  {"https://open.waylet.es?token=:1:h", ""},
+		"not a url":      {"://", ""},
+		"empty":          {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := WayletPaymentID(tc.link); got != tc.want {
+				t.Errorf("WayletPaymentID(%q) = %q, want %q", tc.link, got, tc.want)
+			}
+		})
+	}
+}
