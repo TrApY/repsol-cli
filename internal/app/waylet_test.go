@@ -1751,3 +1751,57 @@ func TestWayletStateFromBeforeTheFixIsStillUnderstood(t *testing.T) {
 	}
 	requirePendingPayment(t, st, "")
 }
+
+// A state file from before the fix keeps only the cart id, which Repsol never
+// finds: its lookup answers 404 for good. Once it is more than a day old, that
+// 404 is a conclusive "not paid", so it lets a new order through with a notice
+// instead of holding every order back.
+func TestWayletOldStateWithTheCartIdIsForgottenAfterADay(t *testing.T) {
+	ctx := context.Background()
+	const cartID = "000000000042"
+
+	setup := func(t *testing.T) (*App, *fakerepsol.Server, config.Store) {
+		t.Helper()
+		a, fake, st, clock, _ := newWayletAppClock(t)
+		if err := st.SavePendingPayment(defaultTestProfile, config.PendingPayment{
+			PaymentID: cartID, StartedAt: clock.Now().Add(-PaymentStateTTL - time.Hour),
+		}); err != nil {
+			t.Fatalf("SavePendingPayment: %v", err)
+		}
+		return a, fake, st
+	}
+
+	t.Run("a dry run goes through and keeps the file", func(t *testing.T) {
+		a, fake, st := setup(t)
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet", DryRun: true})
+		if err != nil {
+			t.Fatalf("dry run with the old state: %v", err)
+		}
+		if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "would be forgotten") {
+			t.Errorf("notices = %q, want one saying the old payment would be forgotten", res.Notices)
+		}
+		if got := fake.Count(pathByPayment); got != 1 {
+			t.Errorf("%s requests = %d, want 1: the lookup that answers 404", pathByPayment, got)
+		}
+		requireNoWayletWrites(t, fake)
+		requirePendingPayment(t, st, cartID)
+	})
+
+	t.Run("a new order goes through and replaces it", func(t *testing.T) {
+		a, fake, st := setup(t)
+		res, err := a.PlaceOrder(ctx, PlaceOrderInput{Quantity: 1, Pay: "waylet"})
+		if err != nil {
+			t.Fatalf("order with the old state: %v", err)
+		}
+		if len(res.Notices) != 1 || !strings.Contains(res.Notices[0], "forgotten") {
+			t.Errorf("notices = %q, want one saying the old payment was forgotten", res.Notices)
+		}
+		if got := fake.Count(pathByPayment); got != 1 {
+			t.Errorf("%s requests = %d, want 1: the lookup that answers 404", pathByPayment, got)
+		}
+		if res.PaymentID == "" || res.PaymentID == cartID {
+			t.Fatalf("PaymentID = %q, want the id of the new payment", res.PaymentID)
+		}
+		requirePendingPayment(t, st, res.PaymentID)
+	})
+}
