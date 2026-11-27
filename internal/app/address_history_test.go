@@ -115,6 +115,7 @@ func TestSetAddressIgnoresHistoryOfAnotherStreetOrLocality(t *testing.T) {
 		{"another locality code", func(h *repsolapi.HistoryAddress) { h.LocalityCode = "99999999999" }},
 		{"another municipality code", func(h *repsolapi.HistoryAddress) { h.MunicipalityCode = "99999999999" }},
 		{"another locality name", func(h *repsolapi.HistoryAddress) { h.Locality = "Otropueblo" }},
+		{"another municipality name", func(h *repsolapi.HistoryAddress) { h.Municipality = "Otromunicipio" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, fake, _ := newSignedInApp(t)
