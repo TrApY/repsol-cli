@@ -100,6 +100,58 @@ func TestSetAddressIgnoresHistoryOfOtherAddresses(t *testing.T) {
 	}
 }
 
+// The same street name, number and postal code are not enough: an order for
+// another kind of street (a Plaza next to the Calle), another street code, or
+// another locality or municipality under the same postal code is another
+// address, and its floor and door must not be copied.
+func TestSetAddressIgnoresHistoryOfAnotherStreetOrLocality(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*repsolapi.HistoryAddress)
+	}{
+		{"another street type", func(h *repsolapi.HistoryAddress) { h.StreetType = "Plaza" }},
+		{"another street type code", func(h *repsolapi.HistoryAddress) { h.StreetTypeCode = "0009" }},
+		{"another street code", func(h *repsolapi.HistoryAddress) { h.StreetCode = "0000000009" }},
+		{"another locality code", func(h *repsolapi.HistoryAddress) { h.LocalityCode = "99999999999" }},
+		{"another municipality code", func(h *repsolapi.HistoryAddress) { h.MunicipalityCode = "99999999999" }},
+		{"another locality name", func(h *repsolapi.HistoryAddress) { h.Locality = "Otropueblo" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, fake, _ := newSignedInApp(t)
+			other := historyAt("20000002", "Falsa", "1", fakerepsol.PostalCode, "9", "Z")
+			tc.change(&other.Address)
+			fake.SetHistory([]repsolapi.HistoryEntry{other})
+
+			view, err := a.SetAddress(context.Background(), SetAddressInput{Text: "Calle Falsa 1, Pueblo"})
+			if err != nil {
+				t.Fatalf("SetAddress: %v", err)
+			}
+			if view.Floor != "" || view.Door != "" || view.Note != "" {
+				t.Errorf("floor/door/note = %q/%q/%q, want none from another address", view.Floor, view.Door, view.Note)
+			}
+		})
+	}
+}
+
+// A history address that carries the same codes and names as the candidate,
+// in another case, still matches.
+func TestSetAddressMatchesTheHistoryWithTheSameCodes(t *testing.T) {
+	a, fake, _ := newSignedInApp(t)
+	same := historyAt("20000001", "FALSA", "1", fakerepsol.PostalCode, "3", "C")
+	same.Address.StreetType = "CALLE"
+	same.Address.Locality = "PUEBLO"
+	same.Address.MunicipalityCode = fakerepsol.LocalityCode
+	fake.SetHistory([]repsolapi.HistoryEntry{same})
+
+	view, err := a.SetAddress(context.Background(), SetAddressInput{Text: "Calle Falsa 1, Pueblo"})
+	if err != nil {
+		t.Fatalf("SetAddress: %v", err)
+	}
+	if view.Floor != "3" || view.Door != "C" {
+		t.Errorf("floor/door = %q/%q, want 3/C from the order at the same address", view.Floor, view.Door)
+	}
+}
+
 // The history is a convenience: without a session, or when it cannot be read,
 // the address is stored as before.
 func TestSetAddressWorksWhenTheHistoryCannotBeRead(t *testing.T) {
