@@ -192,13 +192,40 @@ func (a *App) floorAndDoorFromHistory(ctx context.Context, addr repsolapi.Addres
 
 // sameDelivery reports whether a history address is the street, number and
 // postal code of addr. History addresses can be partial, so an address without
-// a street, a number or a postal code matches nothing.
+// a street, a number or a postal code matches nothing. A postal code often
+// covers several localities, and a Calle and a Plaza of one town can share a
+// name, so the kind of street, the street code and the locality and
+// municipality must not differ either: each is compared when both sides carry
+// it, and one missing on either side does not stop the match.
 func sameDelivery(h repsolapi.HistoryAddress, addr repsolapi.Address) bool {
 	street, number, postal := strings.TrimSpace(addr.Street), strings.TrimSpace(addr.Number), strings.TrimSpace(addr.PostalCode)
-	return street != "" && number != "" && postal != "" &&
-		strings.EqualFold(strings.TrimSpace(h.Street), street) &&
-		strings.EqualFold(strings.TrimSpace(h.Number), number) &&
-		strings.TrimSpace(h.PostalCode) == postal
+	if street == "" || number == "" || postal == "" ||
+		!strings.EqualFold(strings.TrimSpace(h.Street), street) ||
+		!strings.EqualFold(strings.TrimSpace(h.Number), number) ||
+		strings.TrimSpace(h.PostalCode) != postal {
+		return false
+	}
+	for _, pair := range [][2]string{
+		{h.StreetType, addr.StreetType},
+		{h.StreetTypeCode, addr.StreetTypeCode},
+		{h.StreetCode, addr.StreetCode},
+		{h.Locality, addr.Locality},
+		{h.LocalityCode, addr.LocalityCode},
+		{h.Municipality, addr.Municipality},
+		{h.MunicipalityCode, addr.MunicipalityCode},
+	} {
+		if differ(pair[0], pair[1]) {
+			return false
+		}
+	}
+	return true
+}
+
+// differ reports whether two address fields are both given and not the same,
+// ignoring case and surrounding spaces.
+func differ(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	return a != "" && b != "" && !strings.EqualFold(a, b)
 }
 
 // ShowAddress returns the stored address of the profile. It is a usage error
